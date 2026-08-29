@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>G0 — drift</title></head>
+  <body style="background:#14161a;color:#d8dee9;font:12px/1.5 Menlo,monospace;padding:12px">
+    <pre id="out">measuring…</pre>
+    <script type="module">
+      const ctx = document.createElement("canvas").getContext("2d");
+      const lines = [];
+      const p = (s) => lines.push(s);
+
+      for (const family of ["Menlo", "Monaco"]) {
+        for (const size of [14, 24]) {
+          ctx.font = `${size}px ${family}`;
+          const cellW = ctx.measureText("M").width;
+          p(`\n=== ${family} @ ${size}px — cellW('M') = ${cellW.toFixed(4)} ===`);
+          for (const g of ["─", "│", "┌", "┼", "═", "║", "╬", "█", "░", "a"]) {
+            const w = ctx.measureText(g).width;
+            const d = w - cellW;
+            p(
+              `  ${g}  width ${w.toFixed(4)}  Δ ${d >= 0 ? "+" : ""}${d.toFixed(4)}` +
+                `  (${((d / cellW) * 100).toFixed(1)}% of a cell)`,
+            );
+          }
+          // Drift across a full-width run, whole-string vs per-glyph.
+          for (const [label, glyph] of [["light ─", "─"], ["double ═", "═"]]) {
+            const w = ctx.measureText(glyph).width;
+            for (const cols of [44, 120]) {
+              const wholeString = ctx.measureText(glyph.repeat(cols)).width;
+              const perGlyph = cols * cellW;
+              const drift = wholeString - perGlyph;
+              p(
+                `  ${cols.toString().padStart(3)} × ${label}: whole-string ends at ${wholeString.toFixed(1)}px, ` +
+                  `per-glyph at ${perGlyph.toFixed(1)}px — drift ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}px ` +
+                  `(${(drift / cellW).toFixed(2)} cells)`,
+              );
+            }
+          }
+        }
+      }
+      document.getElementById("out").textContent = lines.join("\n");
+    </script>
+  </body>
+</html>

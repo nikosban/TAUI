@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>G0 — cell metrics spike</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 16px 20px;
+        background: #14161a; color: #d8dee9;
+        font: 13px/1.5 system-ui, -apple-system, sans-serif;
+      }
+      h1 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+      .sub { color: #7b8494; margin: 0 0 16px; }
+      fieldset {
+        border: 1px solid #2a2f38; border-radius: 6px;
+        margin: 0 0 16px; padding: 10px 12px;
+      }
+      legend { color: #7b8494; padding: 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+      label { margin-right: 14px; white-space: nowrap; }
+      select, input { background: #1c2027; color: #d8dee9; border: 1px solid #2f3540; border-radius: 4px; padding: 3px 5px; font: inherit; }
+      table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      th, td { text-align: left; padding: 2px 14px 2px 0; }
+      th { color: #7b8494; font-weight: 500; }
+      .ok { color: #7fd88f; }
+      .bad { color: #f07178; font-weight: 600; }
+      .warn { color: #e6c07b; }
+      canvas { display: block; background: #14161a; }
+      .panel { border: 1px solid #2a2f38; border-radius: 6px; padding: 10px 12px; margin: 0 0 14px; }
+      .panel > h2 { font-size: 12px; margin: 0 0 8px; color: #7b8494; text-transform: uppercase; letter-spacing: .06em; font-weight: 500; }
+      pre { margin: 0; font: 13px/1.2 Menlo, monospace; color: #9aa4b2; }
+      .verdict { padding: 8px 12px; border-radius: 6px; margin: 0 0 16px; font-weight: 600; }
+      .verdict.pass { background: #17301f; color: #7fd88f; border: 1px solid #2a4a2e; }
+      .verdict.fail { background: #331a1c; color: #f07178; border: 1px solid #4a2427; }
+      .cols { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+      .cols > * { flex: 0 0 auto; }
+      code { color: #b48ead; }
+    </style>
+  </head>
+  <body>
+    <h1>G0 — cell metrics spike</h1>
+    <p class="sub">
+      Throwaway. Validates the one assumption the entire canvas renderer rests on:
+      that <code>measureText("M").width</code> × <code>fontSize · lineHeightFactor</code>
+      yields a stable cell box, on real fonts, at this machine's device pixel ratio.
+    </p>
+
+    <fieldset>
+      <legend>controls</legend>
+      <label>font <select id="font"></select></label>
+      <label>size <input id="size" type="number" min="6" max="40" step="0.5" value="14" style="width: 62px" /></label>
+      <label>line height <input id="lh" type="number" min="0.8" max="2" step="0.05" value="1.2" style="width: 62px" /></label>
+      <label><input id="grid" type="checkbox" checked /> grid</label>
+      <label><input id="perglyph" type="checkbox" checked /> per-glyph advance</label>
+    </fieldset>
+
+    <div id="verdict" class="verdict"></div>
+
+    <div class="cols">
+      <div class="panel">
+        <h2>metrics</h2>
+        <table id="metrics"></table>
+      </div>
+      <div class="panel">
+        <h2>glyph coverage probe</h2>
+        <table id="probes"></table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>canvas</h2>
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>toText() from the same document — columns must line up with the canvas above</h2>
+      <pre id="text"></pre>
+    </div>
+
+    <script type="module">
+      import {
+        composite,
+        createDocument,
+        drawBox,
+        drawLine,
+        drawText,
+        sequentialIdGen,
+        toText,
+      } from "../../packages/core/dist/index.js";
+
+      const S = { fg: { kind: "default" }, bg: { kind: "default" } };
+
+      /** A document that exercises junction merging, so misalignment is obvious. */
+      function buildDocument() {
+        let d = createDocument(44, 12, { idGen: sequentialIdGen() });
+        const id = d.activeLayerId;
+        d = drawBox(d, id, { top: 0, left: 0, rows: 4, cols: 22 }, "light", true, S);
+        d = drawBox(d, id, { top: 0, left: 21, rows: 4, cols: 23 }, "light", true, S);
+        d = drawBox(d, id, { top: 3, left: 0, rows: 5, cols: 44 }, "light", true, S);
+        d = drawBox(d, id, { top: 7, left: 0, rows: 5, cols: 44 }, "double", true, S);
+        d = drawLine(d, id, { row: 3, col: 30 }, { row: 7, col: 30 }, "heavy", true, S);
+        d = drawText(d, id, 1, 2, "CPU  42%", S);
+        d = drawText(d, id, 1, 23, "MEM  71%", S);
+        d = drawText(d, id, 4, 2, "requests/sec", S);
+        d = drawText(d, id, 5, 2, "MMMMMMMMMMMMMMMMMMMMMMMMMM", S);
+        d = drawText(d, id, 6, 2, "iiiiiiiiiiiiiiiiiiiiiiiiii", S);
+        d = drawText(d, id, 8, 2, "status: ok", S);
+        d = drawText(d, id, 9, 2, "░▒▓█ shading and blocks ████", S);
+        return d;
+      }
+
+      const DOC = buildDocument();
+      const GRID = composite(DOC);
+
+      /** The probe set from the GUI spec, plus block elements. */
+      const PROBES = [
+        "─","│","┌","┐","└","┘","├","┤","┬","┴","┼",
+        "═","║","╔","╬","━","┃","╋","░","▒","▓","█",
+      ];
+
+      const CANDIDATE_FONTS = [
+        "Menlo", "Monaco", "SF Mono", "Andale Mono", "Courier New",
+        "Consolas", "JetBrains Mono", "Fira Code", "IBM Plex Mono",
+        "Source Code Pro", "monospace",
+      ];
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+
+      // Offscreen context used only for measurement, mirroring measure.ts.
+      const measureCtx = document.createElement("canvas").getContext("2d");
+
+      function fontString(family, sizePx, { bold = false, italic = false } = {}) {
+        return `${italic ? "italic " : ""}${bold ? "bold " : ""}${sizePx}px ${family}`;
+      }
+
+      function measure(family, sizePx, lineHeightFactor) {
+        measureCtx.font = fontString(family, sizePx);
+        const m = measureCtx.measureText("M");
+        const cellW = m.width;
+        const cellH = sizePx * lineHeightFactor;
+        const ascent = m.fontBoundingBoxAscent;
+        const descent = m.fontBoundingBoxDescent;
+        // Centre the font's own box within the cell, rather than assuming a ratio.
+        const baselineY =
+          ascent !== undefined && descent !== undefined
+            ? (cellH - (ascent + descent)) / 2 + ascent
+            : sizePx * 0.8;
+        return { cellW, cellH, baselineY, ascent, descent, dpr: window.devicePixelRatio };
+      }
+
+      function probeGlyphs(family, sizePx, cellW) {
+        measureCtx.font = fontString(family, sizePx);
+        return PROBES.map((glyph) => {
+          const width = measureCtx.measureText(glyph).width;
+          return { glyph, width, delta: width - cellW };
+        });
+      }
+
+      function paint(metrics, opts) {
+        const { cellW, cellH, baselineY, dpr } = metrics;
+        const cols = DOC.cols;
+        const rows = DOC.rows;
+        const cssW = Math.ceil(cellW * cols);
+        const cssH = Math.ceil(cellH * rows);
+
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${cssH}px`;
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+
+        // Set the transform once: every draw call below is in CSS pixels, so the
+        // device ratio never leaks into layout maths.
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.textBaseline = "alphabetic";
+        if ("textRendering" in ctx) ctx.textRendering = "geometricPrecision";
+
+        ctx.fillStyle = "#14161a";
+        ctx.fillRect(0, 0, cssW, cssH);
+
+        if (opts.grid) {
+          ctx.strokeStyle = "#242a33";
+          ctx.lineWidth = 1 / dpr;
+          ctx.beginPath();
+          for (let c = 0; c <= cols; c++) {
+            const x = Math.round(c * cellW * dpr) / dpr;
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, cssH);
+          }
+          for (let r = 0; r <= rows; r++) {
+            const y = Math.round(r * cellH * dpr) / dpr;
+            ctx.moveTo(0, y);
+            ctx.lineTo(cssW, y);
+          }
+          ctx.stroke();
+        }
+
+        ctx.font = fontString(opts.family, opts.sizePx);
+        ctx.fillStyle = "#d8dee9";
+
+        for (let r = 0; r < rows; r++) {
+          const row = GRID[r];
+          const y = r * cellH + baselineY;
+          if (opts.perGlyph) {
+            // Position every glyph explicitly: the font can then only be wrong
+            // about a glyph's width, never about where the column starts.
+            for (let c = 0; c < cols; c++) {
+              const ch = row[c].char;
+              if (ch === " ") continue;
+              ctx.fillText(ch, c * cellW, y);
+            }
+          } else {
+            // Naive: hand the whole row to fillText and let the font's own
+            // advances decide column positions.
+            ctx.fillText(row.map((cell) => cell.char).join(""), 0, y);
+          }
+        }
+      }
+
+      function render() {
+        const family = $("font").value;
+        const sizePx = Number($("size").value);
+        const lineHeightFactor = Number($("lh").value);
+        const opts = {
+          family,
+          sizePx,
+          grid: $("grid").checked,
+          perGlyph: $("perglyph").checked,
+        };
+
+        const metrics = measure(family, sizePx, lineHeightFactor);
+        const probes = probeGlyphs(family, sizePx, metrics.cellW);
+        paint(metrics, opts);
+
+        const isIntegral = (n) => Math.abs(n - Math.round(n)) < 1e-9;
+        const fmt = (n) => (n === undefined ? "—" : n.toFixed(4).replace(/\.?0+$/, ""));
+
+        $("metrics").innerHTML = [
+          ["devicePixelRatio", metrics.dpr, ""],
+          ["cellW = measureText('M')", fmt(metrics.cellW), isIntegral(metrics.cellW) ? "ok" : "warn"],
+          ["cellW integral?", isIntegral(metrics.cellW) ? "yes" : "NO — fractional", isIntegral(metrics.cellW) ? "ok" : "warn"],
+          ["cellW × dpr integral?", isIntegral(metrics.cellW * metrics.dpr) ? "yes" : "no", isIntegral(metrics.cellW * metrics.dpr) ? "ok" : "warn"],
+          ["cellH = size × lh", fmt(metrics.cellH), isIntegral(metrics.cellH) ? "ok" : "warn"],
+          ["fontBoundingBoxAscent", fmt(metrics.ascent), metrics.ascent === undefined ? "bad" : "ok"],
+          ["fontBoundingBoxDescent", fmt(metrics.descent), ""],
+          ["derived baselineY", fmt(metrics.baselineY), ""],
+          ["font resolved?", document.fonts.check(fontString(family, sizePx)) ? "yes" : "NO — falling back", document.fonts.check(fontString(family, sizePx)) ? "ok" : "bad"],
+        ]
+          .map(([k, v, cls]) => `<tr><th>${k}</th><td class="${cls}">${v}</td></tr>`)
+          .join("");
+
+        const offenders = probes.filter((p) => Math.abs(p.delta) > 0.01);
+        $("probes").innerHTML =
+          `<tr><th>glyph</th><th>width</th><th>Δ vs cellW</th></tr>` +
+          probes
+            .map(
+              (p) =>
+                `<tr><td style="font-family:${family},monospace">${p.glyph}</td><td>${fmt(p.width)}</td><td class="${Math.abs(p.delta) > 0.01 ? "bad" : "ok"}">${p.delta === 0 ? "0" : fmt(p.delta)}</td></tr>`,
+            )
+            .join("");
+
+        const v = $("verdict");
+        if (offenders.length === 0) {
+          v.className = "verdict pass";
+          v.textContent = `PASS — all ${probes.length} probe glyphs advance exactly ${fmt(metrics.cellW)}px, matching 'M'. Uniform cell box holds.`;
+        } else {
+          v.className = "verdict fail";
+          v.textContent = `FAIL — ${offenders.length} of ${probes.length} probe glyphs have a different advance than 'M': ${offenders.map((o) => o.glyph).join(" ")}. Preview would misalign in this font.`;
+        }
+
+        $("text").textContent = toText(DOC, { trimTrailingWhitespace: false });
+        $("text").style.fontFamily = `${family}, monospace`;
+        $("text").style.fontSize = `${sizePx}px`;
+        $("text").style.lineHeight = `${lineHeightFactor}`;
+      }
+
+      // Populate the font list, marking which ones actually resolve here.
+      const sel = $("font");
+      for (const family of CANDIDATE_FONTS) {
+        const opt = document.createElement("option");
+        const available = document.fonts.check(`14px ${family}`);
+        opt.value = family;
+        opt.textContent = available ? family : `${family} (not installed)`;
+        sel.append(opt);
+      }
+      sel.value = "Menlo";
+
+      // URL params so this can be driven headlessly:
+      //   ?font=Monaco&size=24&lh=1.2&perglyph=0&grid=1&only=canvas
+      const params = new URLSearchParams(location.search);
+      if (params.has("font")) sel.value = params.get("font");
+      if (params.has("size")) $("size").value = params.get("size");
+      if (params.has("lh")) $("lh").value = params.get("lh");
+      if (params.has("grid")) $("grid").checked = params.get("grid") !== "0";
+      if (params.has("perglyph")) $("perglyph").checked = params.get("perglyph") !== "0";
+      if (params.get("only") === "canvas") {
+        // Hide everything but the verdict and the canvas, so a screenshot of the
+        // viewport is all signal.
+        for (const el of document.querySelectorAll("h1, .sub, fieldset, .cols")) {
+          el.style.display = "none";
+        }
+      }
+
+      for (const el of [$("font"), $("size"), $("lh"), $("grid"), $("perglyph")]) {
+        el.addEventListener("input", render);
+      }
+      document.fonts.ready.then(render);
+      render();
+
+      // Expose for scripted inspection.
+      window.__spike = {
+        render,
+        measure: (family, size, lh) => measure(family, size, lh ?? 1.2),
+        probe: (family, size) => {
+          const m = measure(family, size, 1.2);
+          return { cellW: m.cellW, offenders: probeGlyphs(family, size, m.cellW).filter((p) => Math.abs(p.delta) > 0.01) };
+        },
+        fonts: CANDIDATE_FONTS.filter((f) => document.fonts.check(`14px ${f}`)),
+      };
+    </script>
+  </body>
+</html>

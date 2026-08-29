@@ -1,0 +1,638 @@
+:root {
+  color-scheme: dark;
+  --void: #0d0f12;
+  --panel: #14171c;
+  --border: #252a33;
+  --text: #d8dee9;
+  --muted: #7b8494;
+  --accent: #6fa8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--panel);
+  color: var(--text);
+  font:
+    13px / 1.4 system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+/*
+ * Flex rather than grid: the two warning banners are conditional, so a fixed
+ * `grid-template-rows` would assign `1fr` to whichever child happened to land in
+ * that slot — with no banners present that was the status bar, which left the
+ * canvas at its default height and a dead gap underneath.
+ */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.menubar,
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  /* Never squeezed by the canvas, which takes all remaining height. */
+  flex: 0 0 auto;
+}
+
+.statusbar {
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.statusbar span {
+  white-space: nowrap;
+}
+
+/* The text tool captures every letter key while editing; say so visibly. */
+.statusbar span.editing {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+select,
+input,
+button {
+  background: #1c2027;
+  color: var(--text);
+  border: 1px solid #2f3540;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
+}
+
+input[type="number"] {
+  width: 62px;
+}
+input[type="checkbox"] {
+  width: auto;
+}
+
+button {
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--accent);
+}
+
+.banner {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.banner.warn {
+  background: #3a2a12;
+  color: #e6c07b;
+}
+.banner.info {
+  background: #16283d;
+  color: #8ab4f8;
+}
+
+/*
+ * The void shade is painted by the renderer, not by CSS, so the boundary between
+ * document and off-canvas is part of the frame rather than a layout artifact.
+ */
+.canvas-viewport {
+  overflow: hidden;
+  background: var(--void);
+  /* min-height:0 lets a flex item shrink below its content, which a canvas needs. */
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+canvas {
+  display: block;
+}
+
+.dot.dirty {
+  color: #e6c07b;
+}
+
+/* ---- G2: workspace, tool rail, inspector ---- */
+
+.workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.toolrail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.toolrail .tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 40px;
+  padding: 5px 0 3px;
+  line-height: 1;
+}
+
+.toolrail .tool .glyph {
+  font-size: 15px;
+}
+
+.toolrail .tool .key {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.toolrail .tool.active {
+  border-color: var(--accent);
+  background: #1d2b40;
+}
+
+.toolrail .tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* A paint on a locked layer no-ops in the engine; the rail says why. */
+.toolrail.lock-flash {
+  animation: lockflash 0.6s ease-out;
+}
+
+@keyframes lockflash {
+  0%,
+  60% {
+    background: #4a2427;
+  }
+  100% {
+    background: var(--panel);
+  }
+}
+
+.inspector {
+  width: 216px;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.inspector h2 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 10px 0 6px;
+  font-weight: 500;
+}
+
+.inspector h2:first-child {
+  margin-top: 0;
+}
+
+.charGrid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chip {
+  font-family: Menlo, monospace;
+  font-size: 13px;
+  padding: 3px 0;
+  text-align: center;
+}
+
+.chip.wide {
+  text-align: left;
+  padding-left: 7px;
+}
+
+.chip.active {
+  border-color: var(--accent);
+  background: #1d2b40;
+}
+
+.small {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+canvas {
+  cursor: crosshair;
+}
+
+canvas.panning {
+  cursor: grab;
+}
+
+.sizeRow {
+  display: flex;
+  gap: 6px;
+}
+
+.sizeRow input[type="number"] {
+  width: 56px;
+}
+
+.swatchRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.swatchLabel {
+  color: var(--muted);
+  font-size: 10px;
+  width: 14px;
+}
+
+.swatch {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid #2f3540;
+  border-radius: 2px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.swatch.active {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+/* ── Layers panel ─────────────────────────────────────────────────────────── */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.layer-list {
+  list-style: none;
+  margin: 6px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: grab;
+}
+
+.layer-row.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.layer-row.drop-target {
+  border-top-color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.layer-row button {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+.layer-row button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.layer-row button:not(:disabled):hover {
+  background: var(--border);
+}
+
+.layer-eye,
+.layer-lock {
+  font-size: 11px;
+  line-height: 1;
+  flex: none;
+  width: 20px;
+  text-align: center;
+}
+
+.layer-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  text-align: left;
+  overflow: hidden;
+}
+
+.layer-name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--void);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  padding: 1px 4px;
+}
+
+.layer-count {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* A hidden layer still lists its contents; dimming says why nothing is drawn. */
+.layer-row.hidden-layer .layer-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.chip.tiny {
+  font-size: 10px;
+  padding: 1px 3px;
+  flex: none;
+}
+
+.chip.tiny.danger:not(:disabled):hover {
+  background: #5a2530;
+}
+
+/* Says why an edit will appear to do nothing, before it is attempted. */
+.notice {
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+}
+
+/* ── Modals ───────────────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 55%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  min-width: 320px;
+  max-width: 460px;
+  max-height: 70vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.modal-field input {
+  background: var(--void);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  padding: 4px 6px;
+}
+
+.modal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modal-list button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.modal-list button:hover {
+  background: var(--border);
+  border-color: var(--accent);
+}
+
+.recovery-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recovery-age {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.chip.danger:not(:disabled):hover {
+  background: #5a2530;
+}
+
+/* ── Notices ──────────────────────────────────────────────────────────────── */
+
+.notices {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 60ch;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 9;
+  font-size: 11px;
+}
+
+.notices p {
+  margin: 0;
+}
+
+.statusbar span.warn {
+  color: #ffb454;
+}
+
+/* ── Inspect panel ────────────────────────────────────────────────────────── */
+
+.inspect-rows {
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inspect-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.inspect-row dt {
+  color: var(--muted);
+}
+
+.inspect-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.inspect-swatch {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  flex: none;
+}
+
+/* ── Palette panel ────────────────────────────────────────────────────────── */
+
+.palette-list {
+  list-style: none;
+  margin: 6px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.palette-row .palette-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  padding: 1px 4px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.palette-row .palette-name:hover {
+  background: var(--border);
+}

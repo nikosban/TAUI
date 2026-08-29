@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>G0 — vertical ink extent</title></head>
+  <body style="background:#14161a;color:#d8dee9;font:12px/1.5 Menlo,monospace;padding:12px">
+    <pre id="out">measuring…</pre>
+    <script type="module">
+      const ctx = document.createElement("canvas").getContext("2d");
+      const lines = [];
+      const p = (s) => lines.push(s);
+
+      p("Vertical ink extent of box-drawing glyphs vs the cell box.");
+      p("A vertical line connects between rows only if its ink spans the FULL cellH.");
+      p("maxLineHeight = (ink ascent + ink descent) / fontSize — beyond this, walls break.\n");
+
+      for (const family of ["Menlo", "Monaco"]) {
+        for (const size of [14, 22]) {
+          ctx.font = `${size}px ${family}`;
+          const m = ctx.measureText("M");
+          p(`=== ${family} @ ${size}px ===`);
+          p(
+            `  font box: ascent ${m.fontBoundingBoxAscent} descent ${m.fontBoundingBoxDescent}` +
+              ` = ${m.fontBoundingBoxAscent + m.fontBoundingBoxDescent}px` +
+              ` (${((m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) / size).toFixed(4)} × size)`,
+          );
+          for (const g of ["│", "┃", "║", "█", "─", "M"]) {
+            const gm = ctx.measureText(g);
+            const ink = gm.actualBoundingBoxAscent + gm.actualBoundingBoxDescent;
+            p(
+              `  ${g}  ink ascent ${gm.actualBoundingBoxAscent.toFixed(2)}` +
+                ` descent ${gm.actualBoundingBoxDescent.toFixed(2)}` +
+                ` = ${ink.toFixed(2)}px  →  max lineHeightFactor ${(ink / size).toFixed(4)}`,
+            );
+          }
+          // The practical question: at which lineHeightFactor does the wall break?
+          const v = ctx.measureText("│");
+          const inkH = v.actualBoundingBoxAscent + v.actualBoundingBoxDescent;
+          p(`  vertical-safe lineHeightFactor <= ${(inkH / size).toFixed(4)}`);
+          for (const lh of [1.0, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5]) {
+            const cellH = size * lh;
+            const gap = cellH - inkH;
+            p(
+              `    lh ${lh.toFixed(2)}: cellH ${cellH.toFixed(2)} vs ink ${inkH.toFixed(2)}` +
+                ` → ${gap <= 0.01 ? "CONNECTED" : `GAP ${gap.toFixed(2)}px`}`,
+            );
+          }
+          p("");
+        }
+      }
+      document.getElementById("out").textContent = lines.join("\n");
+    </script>
+  </body>
+</html>

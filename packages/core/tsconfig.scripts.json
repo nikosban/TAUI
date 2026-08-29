@@ -1,0 +1,13 @@
+{
+  // Dev-only scripts and (from M4) bin/cli.ts: the sole files permitted to touch
+  // Node APIs. Kept in a separate project so that @types/node is never in scope
+  // for src/, where a Node import would violate design principle 1.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "module": "ESNext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["scripts/**/*.ts"]
+}

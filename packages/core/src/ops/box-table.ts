@@ -1,0 +1,127 @@
+/**
+ * GENERATED — do not edit by hand. Run `pnpm gen:box-table` to regenerate.
+ *
+ * The 109 arm-bearing characters of U+2500–U+257F, derived from their Unicode
+ * names by `scripts/box-names.ts`. The 19 excluded glyphs are the dash, arc,
+ * and diagonal variants, which carry no junction semantics.
+ *
+ * Each entry is `[ArmsCode, char]`. The comment shows the decoded arms in
+ * up/down/left/right order, where `-`=none, `L`=light, `H`=heavy, `D`=double.
+ *
+ * The mapping is a **bijection**: 109 characters, 109 distinct codes, no
+ * collisions. That is why the reverse lookup needs no tie-breaking policy.
+ */
+
+import type { ArmsCode } from "./arms.js";
+
+export const BOX_TABLE: readonly (readonly [ArmsCode, string])[] = [
+  [0x05, "─"], // U+2500  --LL  LIGHT HORIZONTAL
+  [0x0a, "━"], // U+2501  --HH  HEAVY HORIZONTAL
+  [0x50, "│"], // U+2502  LL--  LIGHT VERTICAL
+  [0xa0, "┃"], // U+2503  HH--  HEAVY VERTICAL
+  [0x11, "┌"], // U+250C  -L-L  LIGHT DOWN AND RIGHT
+  [0x12, "┍"], // U+250D  -L-H  DOWN LIGHT AND RIGHT HEAVY
+  [0x21, "┎"], // U+250E  -H-L  DOWN HEAVY AND RIGHT LIGHT
+  [0x22, "┏"], // U+250F  -H-H  HEAVY DOWN AND RIGHT
+  [0x14, "┐"], // U+2510  -LL-  LIGHT DOWN AND LEFT
+  [0x18, "┑"], // U+2511  -LH-  DOWN LIGHT AND LEFT HEAVY
+  [0x24, "┒"], // U+2512  -HL-  DOWN HEAVY AND LEFT LIGHT
+  [0x28, "┓"], // U+2513  -HH-  HEAVY DOWN AND LEFT
+  [0x41, "└"], // U+2514  L--L  LIGHT UP AND RIGHT
+  [0x42, "┕"], // U+2515  L--H  UP LIGHT AND RIGHT HEAVY
+  [0x81, "┖"], // U+2516  H--L  UP HEAVY AND RIGHT LIGHT
+  [0x82, "┗"], // U+2517  H--H  HEAVY UP AND RIGHT
+  [0x44, "┘"], // U+2518  L-L-  LIGHT UP AND LEFT
+  [0x48, "┙"], // U+2519  L-H-  UP LIGHT AND LEFT HEAVY
+  [0x84, "┚"], // U+251A  H-L-  UP HEAVY AND LEFT LIGHT
+  [0x88, "┛"], // U+251B  H-H-  HEAVY UP AND LEFT
+  [0x51, "├"], // U+251C  LL-L  LIGHT VERTICAL AND RIGHT
+  [0x52, "┝"], // U+251D  LL-H  VERTICAL LIGHT AND RIGHT HEAVY
+  [0x91, "┞"], // U+251E  HL-L  UP HEAVY AND RIGHT DOWN LIGHT
+  [0x61, "┟"], // U+251F  LH-L  DOWN HEAVY AND RIGHT UP LIGHT
+  [0xa1, "┠"], // U+2520  HH-L  VERTICAL HEAVY AND RIGHT LIGHT
+  [0x92, "┡"], // U+2521  HL-H  DOWN LIGHT AND RIGHT UP HEAVY
+  [0x62, "┢"], // U+2522  LH-H  UP LIGHT AND RIGHT DOWN HEAVY
+  [0xa2, "┣"], // U+2523  HH-H  HEAVY VERTICAL AND RIGHT
+  [0x54, "┤"], // U+2524  LLL-  LIGHT VERTICAL AND LEFT
+  [0x58, "┥"], // U+2525  LLH-  VERTICAL LIGHT AND LEFT HEAVY
+  [0x94, "┦"], // U+2526  HLL-  UP HEAVY AND LEFT DOWN LIGHT
+  [0x64, "┧"], // U+2527  LHL-  DOWN HEAVY AND LEFT UP LIGHT
+  [0xa4, "┨"], // U+2528  HHL-  VERTICAL HEAVY AND LEFT LIGHT
+  [0x98, "┩"], // U+2529  HLH-  DOWN LIGHT AND LEFT UP HEAVY
+  [0x68, "┪"], // U+252A  LHH-  UP LIGHT AND LEFT DOWN HEAVY
+  [0xa8, "┫"], // U+252B  HHH-  HEAVY VERTICAL AND LEFT
+  [0x15, "┬"], // U+252C  -LLL  LIGHT DOWN AND HORIZONTAL
+  [0x19, "┭"], // U+252D  -LHL  LEFT HEAVY AND RIGHT DOWN LIGHT
+  [0x16, "┮"], // U+252E  -LLH  RIGHT HEAVY AND LEFT DOWN LIGHT
+  [0x1a, "┯"], // U+252F  -LHH  DOWN LIGHT AND HORIZONTAL HEAVY
+  [0x25, "┰"], // U+2530  -HLL  DOWN HEAVY AND HORIZONTAL LIGHT
+  [0x29, "┱"], // U+2531  -HHL  RIGHT LIGHT AND LEFT DOWN HEAVY
+  [0x26, "┲"], // U+2532  -HLH  LEFT LIGHT AND RIGHT DOWN HEAVY
+  [0x2a, "┳"], // U+2533  -HHH  HEAVY DOWN AND HORIZONTAL
+  [0x45, "┴"], // U+2534  L-LL  LIGHT UP AND HORIZONTAL
+  [0x49, "┵"], // U+2535  L-HL  LEFT HEAVY AND RIGHT UP LIGHT
+  [0x46, "┶"], // U+2536  L-LH  RIGHT HEAVY AND LEFT UP LIGHT
+  [0x4a, "┷"], // U+2537  L-HH  UP LIGHT AND HORIZONTAL HEAVY
+  [0x85, "┸"], // U+2538  H-LL  UP HEAVY AND HORIZONTAL LIGHT
+  [0x89, "┹"], // U+2539  H-HL  RIGHT LIGHT AND LEFT UP HEAVY
+  [0x86, "┺"], // U+253A  H-LH  LEFT LIGHT AND RIGHT UP HEAVY
+  [0x8a, "┻"], // U+253B  H-HH  HEAVY UP AND HORIZONTAL
+  [0x55, "┼"], // U+253C  LLLL  LIGHT VERTICAL AND HORIZONTAL
+  [0x59, "┽"], // U+253D  LLHL  LEFT HEAVY AND RIGHT VERTICAL LIGHT
+  [0x56, "┾"], // U+253E  LLLH  RIGHT HEAVY AND LEFT VERTICAL LIGHT
+  [0x5a, "┿"], // U+253F  LLHH  VERTICAL LIGHT AND HORIZONTAL HEAVY
+  [0x95, "╀"], // U+2540  HLLL  UP HEAVY AND DOWN HORIZONTAL LIGHT
+  [0x65, "╁"], // U+2541  LHLL  DOWN HEAVY AND UP HORIZONTAL LIGHT
+  [0xa5, "╂"], // U+2542  HHLL  VERTICAL HEAVY AND HORIZONTAL LIGHT
+  [0x99, "╃"], // U+2543  HLHL  LEFT UP HEAVY AND RIGHT DOWN LIGHT
+  [0x96, "╄"], // U+2544  HLLH  RIGHT UP HEAVY AND LEFT DOWN LIGHT
+  [0x69, "╅"], // U+2545  LHHL  LEFT DOWN HEAVY AND RIGHT UP LIGHT
+  [0x66, "╆"], // U+2546  LHLH  RIGHT DOWN HEAVY AND LEFT UP LIGHT
+  [0x9a, "╇"], // U+2547  HLHH  DOWN LIGHT AND UP HORIZONTAL HEAVY
+  [0x6a, "╈"], // U+2548  LHHH  UP LIGHT AND DOWN HORIZONTAL HEAVY
+  [0xa9, "╉"], // U+2549  HHHL  RIGHT LIGHT AND LEFT VERTICAL HEAVY
+  [0xa6, "╊"], // U+254A  HHLH  LEFT LIGHT AND RIGHT VERTICAL HEAVY
+  [0xaa, "╋"], // U+254B  HHHH  HEAVY VERTICAL AND HORIZONTAL
+  [0x0f, "═"], // U+2550  --DD  DOUBLE HORIZONTAL
+  [0xf0, "║"], // U+2551  DD--  DOUBLE VERTICAL
+  [0x13, "╒"], // U+2552  -L-D  DOWN SINGLE AND RIGHT DOUBLE
+  [0x31, "╓"], // U+2553  -D-L  DOWN DOUBLE AND RIGHT SINGLE
+  [0x33, "╔"], // U+2554  -D-D  DOUBLE DOWN AND RIGHT
+  [0x1c, "╕"], // U+2555  -LD-  DOWN SINGLE AND LEFT DOUBLE
+  [0x34, "╖"], // U+2556  -DL-  DOWN DOUBLE AND LEFT SINGLE
+  [0x3c, "╗"], // U+2557  -DD-  DOUBLE DOWN AND LEFT
+  [0x43, "╘"], // U+2558  L--D  UP SINGLE AND RIGHT DOUBLE
+  [0xc1, "╙"], // U+2559  D--L  UP DOUBLE AND RIGHT SINGLE
+  [0xc3, "╚"], // U+255A  D--D  DOUBLE UP AND RIGHT
+  [0x4c, "╛"], // U+255B  L-D-  UP SINGLE AND LEFT DOUBLE
+  [0xc4, "╜"], // U+255C  D-L-  UP DOUBLE AND LEFT SINGLE
+  [0xcc, "╝"], // U+255D  D-D-  DOUBLE UP AND LEFT
+  [0x53, "╞"], // U+255E  LL-D  VERTICAL SINGLE AND RIGHT DOUBLE
+  [0xf1, "╟"], // U+255F  DD-L  VERTICAL DOUBLE AND RIGHT SINGLE
+  [0xf3, "╠"], // U+2560  DD-D  DOUBLE VERTICAL AND RIGHT
+  [0x5c, "╡"], // U+2561  LLD-  VERTICAL SINGLE AND LEFT DOUBLE
+  [0xf4, "╢"], // U+2562  DDL-  VERTICAL DOUBLE AND LEFT SINGLE
+  [0xfc, "╣"], // U+2563  DDD-  DOUBLE VERTICAL AND LEFT
+  [0x1f, "╤"], // U+2564  -LDD  DOWN SINGLE AND HORIZONTAL DOUBLE
+  [0x35, "╥"], // U+2565  -DLL  DOWN DOUBLE AND HORIZONTAL SINGLE
+  [0x3f, "╦"], // U+2566  -DDD  DOUBLE DOWN AND HORIZONTAL
+  [0x4f, "╧"], // U+2567  L-DD  UP SINGLE AND HORIZONTAL DOUBLE
+  [0xc5, "╨"], // U+2568  D-LL  UP DOUBLE AND HORIZONTAL SINGLE
+  [0xcf, "╩"], // U+2569  D-DD  DOUBLE UP AND HORIZONTAL
+  [0x5f, "╪"], // U+256A  LLDD  VERTICAL SINGLE AND HORIZONTAL DOUBLE
+  [0xf5, "╫"], // U+256B  DDLL  VERTICAL DOUBLE AND HORIZONTAL SINGLE
+  [0xff, "╬"], // U+256C  DDDD  DOUBLE VERTICAL AND HORIZONTAL
+  [0x04, "╴"], // U+2574  --L-  LIGHT LEFT
+  [0x40, "╵"], // U+2575  L---  LIGHT UP
+  [0x01, "╶"], // U+2576  ---L  LIGHT RIGHT
+  [0x10, "╷"], // U+2577  -L--  LIGHT DOWN
+  [0x08, "╸"], // U+2578  --H-  HEAVY LEFT
+  [0x80, "╹"], // U+2579  H---  HEAVY UP
+  [0x02, "╺"], // U+257A  ---H  HEAVY RIGHT
+  [0x20, "╻"], // U+257B  -H--  HEAVY DOWN
+  [0x06, "╼"], // U+257C  --LH  LIGHT LEFT AND HEAVY RIGHT
+  [0x60, "╽"], // U+257D  LH--  LIGHT UP AND HEAVY DOWN
+  [0x09, "╾"], // U+257E  --HL  HEAVY LEFT AND LIGHT RIGHT
+  [0x90, "╿"], // U+257F  HL--  HEAVY UP AND LIGHT DOWN
+];

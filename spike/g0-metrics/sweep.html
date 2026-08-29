@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>G0 — font × size sweep</title>
+    <style>
+      body { background: #14161a; color: #d8dee9; font: 12px/1.4 system-ui, sans-serif; padding: 12px; }
+      table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      th, td { padding: 1px 10px 1px 0; text-align: left; white-space: nowrap; }
+      th { color: #7b8494; font-weight: 500; }
+      .ok { color: #7fd88f; } .bad { color: #f07178; } .warn { color: #e6c07b; }
+      h2 { font-size: 13px; margin: 14px 0 6px; }
+    </style>
+  </head>
+  <body>
+    <div id="out">measuring…</div>
+    <script type="module">
+      const PROBES = [
+        "─","│","┌","┐","└","┘","├","┤","┬","┴","┼",
+        "═","║","╔","╬","━","┃","╋","░","▒","▓","█",
+        // Characters a designer will actually type into a mockup.
+        "▀","▄","▌","▐","·","•","→","←","↑","↓","✓","✗","≡",
+      ];
+      const FONTS = [
+        "Menlo","Monaco","SF Mono","Andale Mono","Courier New","Consolas",
+        "JetBrains Mono","Fira Code","IBM Plex Mono","Source Code Pro",
+        "monospace","Helvetica",
+      ];
+      const SIZES = [10, 11, 12, 12.5, 13, 14, 15, 16, 18, 20, 24];
+
+      const ctx = document.createElement("canvas").getContext("2d");
+      const integral = (n) => Math.abs(n - Math.round(n)) < 1e-9;
+      const fmt = (n) => Number(n.toFixed(4)).toString();
+
+      function row(family, sizePx) {
+        ctx.font = `${sizePx}px ${family}`;
+        const cellW = ctx.measureText("M").width;
+        let worst = 0;
+        const offenders = [];
+        for (const g of PROBES) {
+          const d = ctx.measureText(g).width - cellW;
+          if (Math.abs(d) > Math.abs(worst)) worst = d;
+          if (Math.abs(d) > 0.01) offenders.push(g);
+        }
+        return { family, sizePx, cellW, worst, offenders, ratio: cellW / sizePx };
+      }
+
+      const available = FONTS.filter((f) => document.fonts.check(`14px ${f}`));
+      const missing = FONTS.filter((f) => !document.fonts.check(`14px ${f}`));
+
+      let html = `<h2>dpr = ${window.devicePixelRatio} · available: ${available.join(", ")}</h2>`;
+      html += `<div style="color:#7b8494">not installed: ${missing.join(", ") || "none"}</div>`;
+
+      // Per-font advance ratio and which sizes give a whole-pixel cell.
+      html += `<h2>advance ratio (cellW / fontSize) and integral sizes</h2><table>
+        <tr><th>font</th><th>ratio</th><th>sizes with integral cellW (10–40px)</th><th>uniform advance?</th></tr>`;
+      for (const f of available) {
+        const r = row(f, 100).ratio;
+        const good = [];
+        for (let s = 10; s <= 40; s += 0.5) {
+          ctx.font = `${s}px ${f}`;
+          if (integral(ctx.measureText("M").width)) good.push(s);
+        }
+        const uni = row(f, 14).offenders.length === 0;
+        html += `<tr><td>${f}</td><td>${fmt(r)}</td><td class="${good.length ? "ok" : "bad"}">${good.length ? good.join(", ") : "none"}</td><td class="${uni ? "ok" : "bad"}">${uni ? "yes" : "NO"}</td></tr>`;
+      }
+      html += `</table>`;
+
+      // Full matrix.
+      html += `<h2>cellW by font × size — red = non-uniform glyph advance</h2><table>
+        <tr><th>font</th>${SIZES.map((s) => `<th>${s}px</th>`).join("")}</tr>`;
+      for (const f of available) {
+        html += `<tr><td>${f}</td>`;
+        for (const s of SIZES) {
+          const r = row(f, s);
+          const cls = r.offenders.length ? "bad" : integral(r.cellW) ? "ok" : "warn";
+          const note = r.offenders.length ? ` ✗${r.offenders.length}` : integral(r.cellW) ? " ✓" : "";
+          html += `<td class="${cls}">${fmt(r.cellW)}${note}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</table><div style="color:#7b8494;margin-top:6px">green ✓ = integral cellW · amber = fractional cellW · red ✗n = n glyphs disagree with 'M'</div>`;
+
+      // Which glyphs break in the fonts that fail.
+      html += `<h2>offending glyphs per font (at 14px)</h2><table>`;
+      for (const f of available) {
+        const r = row(f, 14);
+        html += `<tr><td>${f}</td><td class="${r.offenders.length ? "bad" : "ok"}">${r.offenders.length ? r.offenders.join(" ") : "— none —"}</td></tr>`;
+      }
+      html += `</table>`;
+
+      // Cumulative drift: does fractional cellW misplace the last column?
+      html += `<h2>cumulative drift at 120 columns (fractional cellW)</h2><table>
+        <tr><th>font @14px</th><th>cellW</th><th>120·cellW</th><th>rounded per-cell sum</th><th>drift (px)</th></tr>`;
+      for (const f of available) {
+        const { cellW } = row(f, 14);
+        const exact = 120 * cellW;
+        let summed = 0;
+        for (let i = 0; i < 120; i++) summed += Math.round(cellW);
+        const drift = summed - exact;
+        html += `<tr><td>${f}</td><td>${fmt(cellW)}</td><td>${fmt(exact)}</td><td>${fmt(summed)}</td><td class="${Math.abs(drift) > 1 ? "bad" : "ok"}">${fmt(drift)}</td></tr>`;
+      }
+      html += `</table><div style="color:#7b8494;margin-top:6px">This is why columns must be positioned as <code>col × cellW</code>, never by accumulating a rounded per-cell width.</div>`;
+
+      document.getElementById("out").innerHTML = html;
+      document.title = "sweep-done";
+    </script>
+  </body>
+</html>
