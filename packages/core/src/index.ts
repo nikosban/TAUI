@@ -74,6 +74,16 @@ export {
 } from "./model/document.js";
 export type { Layer } from "./model/layer.js";
 export { cellKey, createLayer, parseCellKey } from "./model/layer.js";
+export type { DocumentResourceOptions } from "./model/resource-policy.js";
+export {
+  assertBoundedString,
+  assertDocumentDimensions,
+  assertDocumentResources,
+  assertGridResources,
+  BoundedWarnings,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
+} from "./model/resource-policy.js";
 // ---- ops ----
 export type { Arms, ArmsCode, Direction, LineStyle } from "./ops/arms.js";
 export {

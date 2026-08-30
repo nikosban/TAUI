@@ -12,7 +12,7 @@
  * verbatim.
  */
 
-import { type Color, colorEquals, DEFAULT_COLOR, resolveColor } from "../model/color.js";
+import { type Color, DEFAULT_COLOR, resolveColor } from "../model/color.js";
 import { cellAt, clipRect, type Rect, type TuiDocument } from "../model/document.js";
 import { DIRECTIONS, type LineStyle } from "../ops/arms.js";
 import { armsOf } from "../ops/box-merge.js";
@@ -72,16 +72,29 @@ export function distance(
 
 /** The most frequent value, or `fallback` when there are none. */
 function dominant(values: readonly Color[], fallback: Color): Color {
-  const tally: { color: Color; count: number }[] = [];
+  const keyOf = (color: Color): string => {
+    switch (color.kind) {
+      case "default":
+        return "default";
+      case "ansi16":
+        return `ansi16:${color.index}`;
+      case "ansi256":
+        return `ansi256:${color.index}`;
+      case "rgb":
+        return `rgb:${color.r},${color.g},${color.b}`;
+    }
+  };
+  const tally = new Map<string, { color: Color; count: number }>();
   for (const value of values) {
-    const found = tally.find((entry) => colorEquals(entry.color, value));
-    if (found === undefined) tally.push({ color: value, count: 1 });
+    const key = keyOf(value);
+    const found = tally.get(key);
+    if (found === undefined) tally.set(key, { color: value, count: 1 });
     else found.count++;
   }
   // First-seen wins a tie, which keeps the result stable for a given document
   // rather than depending on object iteration order.
   let best: { color: Color; count: number } | undefined;
-  for (const entry of tally) {
+  for (const entry of tally.values()) {
     if (best === undefined || entry.count > best.count) best = entry;
   }
   return best?.color ?? fallback;

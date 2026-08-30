@@ -20,6 +20,12 @@
 
 import { ansi256ToRgb, type Color } from "../model/color.js";
 import type { TuiDocument } from "../model/document.js";
+import {
+  assertBoundedString,
+  assertGridResources,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
+} from "../model/resource-policy.js";
 import { composite, type ResolvedCell, type ResolvedGrid } from "./composite.js";
 
 /** How to paint the two colours SVG has no notion of. */
@@ -138,12 +144,27 @@ export function toSvg(doc: TuiDocument, opts: ToSvgOptions = {}): string {
 
 /** `toSvg` over an already-composited grid. */
 export function gridToSvg(grid: ResolvedGrid, opts: ToSvgOptions = {}): string {
+  assertGridResources(grid);
   const cellW = opts.cellW ?? 8;
   const cellH = opts.cellH ?? 16;
   const fontSize = opts.fontSize ?? 13;
   const baseline = opts.baseline ?? cellH * 0.78;
   const fontFamily = opts.fontFamily ?? DEFAULT_FONT_STACK;
   const theme = opts.theme ?? DEFAULT_SVG_THEME;
+
+  for (const [label, value] of [
+    ["cellW", cellW],
+    ["cellH", cellH],
+    ["fontSize", fontSize],
+    ["baseline", baseline],
+  ] as const) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new ResourceLimitError(`${label} must be a finite positive number`);
+    }
+  }
+  assertBoundedString(fontFamily, "fontFamily", RESOURCE_LIMITS.nameChars);
+  assertBoundedString(theme.defaultFg, "theme.defaultFg", RESOURCE_LIMITS.nameChars);
+  assertBoundedString(theme.defaultBg, "theme.defaultBg", RESOURCE_LIMITS.nameChars);
 
   const rows = grid.length;
   const cols = grid[0]?.length ?? 0;

@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { parseAnsi } from "../src/io/ansi-import.js";
 import { DEFAULT_COLOR } from "../src/model/color.js";
 import { createDocument, sequentialIdGen, type TuiDocument } from "../src/model/document.js";
+import { RESOURCE_LIMITS } from "../src/model/resource-policy.js";
 import { drawBox } from "../src/ops/box.js";
 import { drawText, setCell } from "../src/ops/draw.js";
 import { toAnsi } from "../src/render/ansi.js";
@@ -170,6 +171,25 @@ describe("cursor positioning", () => {
     expect(doc.cols).toBe(4);
     expect(Object.keys(doc.layers[0]?.cells ?? {})).toHaveLength(4);
   });
+
+  it("clips hostile cursor coordinates without creating an enormous document", () => {
+    const { doc, warnings } = parse("\x1b[999999999999;999999999999HX");
+    expect(doc.cols).toBe(1);
+    expect(doc.rows).toBe(1);
+    expect(Object.keys(doc.layers[0]?.cells ?? {})).toHaveLength(0);
+    expect(warnings.join("\n")).toMatch(/resource limits/u);
+  });
+
+  it("bounds explicit dimensions and total area without throwing", () => {
+    const { doc, warnings } = parse("x", {
+      cols: RESOURCE_LIMITS.documentCols + 1,
+      rows: RESOURCE_LIMITS.documentRows + 1,
+    });
+    expect(doc.cols).toBe(RESOURCE_LIMITS.documentCols);
+    expect(doc.cols * doc.rows).toBeLessThanOrEqual(RESOURCE_LIMITS.documentArea);
+    expect(warnings.join("\n")).toMatch(/requested cols/u);
+    expect(warnings.join("\n")).toMatch(/requested rows/u);
+  });
 });
 
 describe("colorMode inference", () => {
@@ -262,6 +282,12 @@ describe("hostile input never throws", () => {
     expect(parse("\x1b[48;2;1mx").warnings.join()).toContain("truncated 48;2");
     expect(parse("\x1b[38;9;1mx").warnings.join()).toContain("unsupported 38;9");
     expect(parse("a\x00b").warnings.join()).toContain("skipped control character");
+  });
+
+  it("caps repetitive parser warnings", () => {
+    const { warnings } = parse("\u0000".repeat(1_000));
+    expect(warnings).toHaveLength(RESOURCE_LIMITS.importWarnings + 1);
+    expect(warnings.at(-1)).toMatch(/omitted .* warning/u);
   });
 });
 

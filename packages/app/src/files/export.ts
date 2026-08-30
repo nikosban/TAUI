@@ -17,6 +17,14 @@ import type { Theme } from "../canvas/paint-plan.js";
 import { buildPaintPlan } from "../canvas/paint-plan.js";
 import { createRenderer } from "../canvas/renderer.js";
 
+/**
+ * A conservative cross-browser ceiling for a temporary PNG backing store.
+ * RGBA alone costs four bytes per pixel, so this caps the uncompressed buffer at
+ * roughly 64 MB before browser/encoder overhead.
+ */
+const MAX_PNG_PIXELS = 16_000_000;
+export const MAX_PNG_EDGE = 16_384;
+
 export type ExportFormat = "ansi" | "text" | "svg" | "png";
 
 export interface FormatInfo {
@@ -108,12 +116,38 @@ export interface PngOptions {
  */
 export async function exportAsPng(doc: TuiDocument, opts: PngOptions): Promise<Blob> {
   const scale = opts.scale ?? 2;
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new RangeError(`PNG scale must be a positive finite number, got ${scale}`);
+  }
+  if (
+    !Number.isFinite(opts.metrics.cellW) ||
+    !Number.isFinite(opts.metrics.cellH) ||
+    opts.metrics.cellW <= 0 ||
+    opts.metrics.cellH <= 0
+  ) {
+    throw new RangeError("PNG cell metrics must be positive finite numbers");
+  }
   const size: GridSize = { cols: doc.cols, rows: doc.rows };
 
   // A viewport exactly the size of the document at zoom 1: `contentOrigin` then
   // centres nothing and the whole grid is in frame.
   const widthCss = doc.cols * opts.metrics.cellW;
   const heightCss = doc.rows * opts.metrics.cellH;
+  const backingWidth = Math.max(1, Math.round(widthCss * scale));
+  const backingHeight = Math.max(1, Math.round(heightCss * scale));
+  const backingPixels = backingWidth * backingHeight;
+  if (
+    !Number.isSafeInteger(backingWidth) ||
+    !Number.isSafeInteger(backingHeight) ||
+    backingWidth > MAX_PNG_EDGE ||
+    backingHeight > MAX_PNG_EDGE ||
+    !Number.isSafeInteger(backingPixels) ||
+    backingPixels > MAX_PNG_PIXELS
+  ) {
+    throw new RangeError(
+      `PNG backing store ${backingWidth}×${backingHeight} exceeds the safe export limit`,
+    );
+  }
   const viewport: Viewport = {
     scrollX: 0,
     scrollY: 0,

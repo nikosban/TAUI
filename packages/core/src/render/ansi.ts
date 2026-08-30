@@ -14,6 +14,7 @@
 
 import { type Color, type ColorMode, downgradeColor } from "../model/color.js";
 import type { TuiDocument } from "../model/document.js";
+import { assertGridResources } from "../model/resource-policy.js";
 import { composite, type ResolvedCell, type ResolvedGrid } from "./composite.js";
 
 export interface ToAnsiOptions {
@@ -115,6 +116,7 @@ export function toAnsi(doc: TuiDocument, opts: ToAnsiOptions = {}): string {
 
 /** `toAnsi` over an already-composited grid, so a caller can reuse one. */
 export function gridToAnsi(grid: ResolvedGrid, mode: ColorMode, opts: ToAnsiOptions = {}): string {
+  assertGridResources(grid);
   const out: string[] = [];
 
   for (const row of grid) {

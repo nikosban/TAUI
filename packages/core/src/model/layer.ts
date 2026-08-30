@@ -5,6 +5,7 @@
  */
 
 import type { Cell } from "./cell.js";
+import { assertBoundedString, RESOURCE_LIMITS } from "./resource-policy.js";
 
 export interface Layer {
   readonly id: string;
@@ -34,6 +35,9 @@ export function parseCellKey(key: string): { row: number; col: number } | null {
 }
 
 export function createLayer(id: string, name: string): Layer {
+  if (id.length === 0) throw new RangeError("layer id must be non-empty");
+  assertBoundedString(id, "layer id", RESOURCE_LIMITS.idChars);
+  assertBoundedString(name, "layer name", RESOURCE_LIMITS.nameChars);
   // Note: `locked: false` and `visible: true` are written explicitly because they
   // are required fields. `excludeFromHandoff` is omitted — optional flags must stay
   // absent so semantically-equal documents serialize byte-identically.

@@ -71,6 +71,20 @@ describe("toAnsi structure", () => {
     // Four columns of content survive.
     expect(stripSgr(line)).toBe("    ");
   });
+
+  it("refuses an injected control character even in a hand-constructed document", () => {
+    const base = doc(1, 1);
+    const unsafe: TuiDocument = {
+      ...base,
+      layers: [
+        {
+          ...base.layers[0]!,
+          cells: { "0,0": { char: E, fg: DEFAULT_COLOR, bg: DEFAULT_COLOR } },
+        },
+      ],
+    };
+    expect(() => toAnsi(unsafe)).toThrow(/control/u);
+  });
 });
 
 describe("minimal-diff encoding", () => {

@@ -2,7 +2,7 @@
  * Rectangular region operations: copy, cut, paste, move.
  */
 
-import type { Cell } from "../model/cell.js";
+import { assertNarrowChar, type Cell } from "../model/cell.js";
 import { clipRect, inBounds, type Rect, type TuiDocument } from "../model/document.js";
 import { withLayerDraft } from "../model/draft.js";
 import { cellKey, parseCellKey } from "../model/layer.js";
@@ -75,6 +75,11 @@ export function pasteRegion(
 ): TuiDocument {
   const entries = Object.entries(clip.cells);
   if (entries.length === 0) return doc;
+  // Validate before opening a draft so a hostile programmatic clipboard cannot
+  // create a partial paste or smuggle active terminal controls into export.
+  for (const [key, cell] of entries) {
+    if (parseCellKey(key) !== null) assertNarrowChar(cell.char);
+  }
   return withLayerDraft(doc, layerId, (draft) => {
     for (const [key, cell] of entries) {
       const offset = parseCellKey(key);

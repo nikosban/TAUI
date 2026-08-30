@@ -649,6 +649,21 @@ describe("the text tool end to end", () => {
     expect(controller.isTyping()).toBe(false);
   });
 
+  it("flushes typing and dismisses its caret before a document replacement", () => {
+    controller.onPointerDown(pointerAt(1, 2));
+    type("kept");
+    expect(controller.isTyping()).toBe(true);
+    expect(scratch).not.toBeNull();
+
+    controller.settleDocumentReplacement();
+
+    expect(controller.isTyping()).toBe(false);
+    expect(controller.isActive()).toBe(false);
+    expect(scratch).toBeNull();
+    expect(caret).toBeNull();
+    expect(toText(documentStore.getState().present()).split("\n")[1]).toBe("  kept");
+  });
+
   it("keeps the burst open when clicking the caret's current cell", () => {
     // Typing "ab" from column 1 leaves the caret at column 3, so clicking there
     // is a no-move and must not split the undo step.

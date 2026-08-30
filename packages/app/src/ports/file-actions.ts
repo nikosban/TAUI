@@ -28,6 +28,8 @@ export interface FileActionsDeps {
     readonly handle: DocHandle | null;
     readonly dirty: boolean;
     readonly revision: number;
+    /** Changes only when a different document is loaded or created. */
+    readonly generation: number;
     /**
      * True while a gesture or typing burst is open.
      *
@@ -45,8 +47,9 @@ export interface FileActionsDeps {
     doc: TuiDocument,
     handle: DocHandle | null,
     opts?: { readonly dirty?: boolean },
-  ) => void;
-  readonly markSaved: (handle: DocHandle) => void;
+  ) => boolean;
+  /** Acknowledges the exact revision a completed write persisted. */
+  readonly markSaved: (handle: DocHandle, revision: number, generation: number) => boolean;
   readonly now: () => number;
   /** User-facing message. Warnings from `deserialize` arrive here too. */
   readonly notify: (message: string) => void;
@@ -66,72 +69,173 @@ export interface FileActions {
   restore(info: RecoveryInfo): Promise<boolean>;
   discard(info: RecoveryInfo): Promise<void>;
   discardAll(): Promise<void>;
-  /** The key this session autosaves under, for tests and diagnostics. */
+  /** The key the current document generation autosaves under. */
   autosaveKey(): string;
 }
 
 /**
  * A stable key for a document that has never been saved.
  *
- * Stable *per session*, so a session's snapshots accumulate into one history
- * rather than scattering one-per-tick under different keys. Minted lazily so a
- * session that only ever opens saved files never creates one.
+ * Stable *per document generation*, so one document's snapshots accumulate into
+ * one history without mixing two unsaved documents opened in the same session.
+ * Minted lazily so a document that is saved before its first autosave never
+ * creates one.
  */
-const untitledKey = (at: number): string => `untitled-${at}`;
+const untitledKey = (at: number, generation: number): string => `untitled-${at}-${generation}`;
 
 export function createFileActions(deps: FileActionsDeps): FileActions {
   let autosave: AutosaveState = initialAutosaveState();
-  let untitled: string | null = null;
+  let untitled: { readonly key: string; readonly generation: number } | null = null;
 
-  /** The key the current document autosaves under. */
-  const keyFor = (handle: DocHandle | null): string => {
-    if (handle !== null) return handle.key;
-    untitled ??= untitledKey(deps.now());
-    return untitled;
+  /**
+   * Save requests are drained in order, with requests arriving during a write
+   * coalesced into one follow-up write. Autosave shares the persistence lane so
+   * it cannot race recovery cleanup.
+   */
+  type SaveKind = "save" | "saveAs";
+  interface SaveBatch {
+    kind: SaveKind;
+    readonly generation: number;
+    readonly settle: Array<(saved: boolean) => void>;
+  }
+  const saveQueue: SaveBatch[] = [];
+  let drainingSaves = false;
+  let persistenceTail: Promise<void> = Promise.resolve();
+
+  const inPersistenceOrder = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = persistenceTail.then(work, work);
+    persistenceTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
-  /** Steps shared by save and saveAs once a handle is known. */
-  const afterWrite = async (handle: DocHandle, revision: number): Promise<void> => {
-    deps.markSaved(handle);
-    autosave = autosaveStateAfterSave(revision, deps.now());
-    await deps.store.pushRecent(handle);
-    // Clearing recovery last, and only after the write succeeded: a failure above
-    // must leave the snapshots in place, since they are then the only copy.
-    await deps.store.clearRecovery(handle.key);
+  /** The key the current document autosaves under. */
+  const keyFor = (handle: DocHandle | null, generation: number): string => {
+    if (handle !== null) return handle.key;
+    if (untitled?.generation !== generation) {
+      untitled = { key: untitledKey(deps.now(), generation), generation };
+    }
+    return untitled.key;
+  };
+
+  /** Best-effort bookkeeping after the document bytes are safely on disk. */
+  const afterWrite = async (
+    handle: DocHandle,
+    revision: number,
+    generation: number,
+    untitledRecoveryKey: string | null,
+  ): Promise<void> => {
+    const belongsToCurrentDocument = deps.markSaved(handle, revision, generation);
+    if (belongsToCurrentDocument) autosave = autosaveStateAfterSave(revision, deps.now());
+
+    const writtenRevisionIsCurrent = (): boolean => {
+      const current = deps.snapshot();
+      return (
+        current.generation === generation &&
+        current.revision === revision &&
+        !current.dirty &&
+        current.handle?.key === handle.key
+      );
+    };
+
+    try {
+      await deps.store.pushRecent(handle);
+    } catch (error) {
+      deps.notify(`Saved, but could not update recent files: ${(error as Error).message}`);
+    }
+
+    // The bytes still landed and belong in recents, but no state or recovery
+    // belonging to a replacement document may be touched by this completion.
+    if (!belongsToCurrentDocument) return;
+
+    // Never discard recovery for work newer than the bytes just written. Check
+    // after the asynchronous recents update because editing may continue while
+    // any part of a save is in flight.
+    if (!writtenRevisionIsCurrent()) return;
+
+    try {
+      await deps.store.clearRecovery(handle.key);
+    } catch (error) {
+      deps.notify(`Saved, but could not clear recovery data: ${(error as Error).message}`);
+    }
+
     // A document saved under a real name no longer needs its untitled history.
-    if (untitled !== null) {
-      await deps.store.clearRecovery(untitled);
-      untitled = null;
+    // Retain the key on failure so a later clean save can try the cleanup again.
+    if (untitledRecoveryKey !== null && writtenRevisionIsCurrent()) {
+      try {
+        await deps.store.clearRecovery(untitledRecoveryKey);
+        if (untitled?.key === untitledRecoveryKey) untitled = null;
+      } catch (error) {
+        deps.notify(`Saved, but could not clear recovery data: ${(error as Error).message}`);
+      }
     }
   };
 
+  const performSave = async (kind: SaveKind, requestedGeneration: number): Promise<boolean> => {
+    const { doc, handle, revision, generation } = deps.snapshot();
+    // A queued click belongs to the document that was visible when it happened.
+    // If that document was replaced while an earlier write was in flight, do not
+    // unexpectedly save the replacement (or open a Save As dialog for it).
+    if (generation !== requestedGeneration) return false;
+    const untitledRecoveryKey =
+      untitled?.generation === generation && handle === null ? untitled.key : null;
+    try {
+      if (kind === "saveAs" || handle === null) {
+        const suggested = handle?.label ?? "untitled.tui";
+        const result = await deps.store.saveAs(serialize(doc), suggested);
+        await afterWrite(result.handle, revision, generation, untitledRecoveryKey);
+      } else {
+        await deps.store.save(handle, serialize(doc));
+        await afterWrite(handle, revision, generation, untitledRecoveryKey);
+      }
+      return true;
+    } catch (error) {
+      if (isCancelled(error)) return false;
+      deps.notify(`Could not save: ${(error as Error).message}`);
+      return false;
+    }
+  };
+
+  const drainSaves = async (): Promise<void> => {
+    if (drainingSaves) return;
+    drainingSaves = true;
+    try {
+      while (saveQueue.length > 0) {
+        const batch = saveQueue.shift() as SaveBatch;
+        const saved = await inPersistenceOrder(() => performSave(batch.kind, batch.generation));
+        for (const settle of batch.settle) settle(saved);
+      }
+    } finally {
+      drainingSaves = false;
+      // A request can be queued by a completion handler after the loop observes
+      // null but before this task yields back to the browser.
+      if (saveQueue.length > 0) void drainSaves();
+    }
+  };
+
+  const requestSave = (kind: SaveKind): Promise<boolean> =>
+    new Promise((resolve) => {
+      const generation = deps.snapshot().generation;
+      const queued = saveQueue.at(-1);
+      if (queued === undefined || queued.generation !== generation) {
+        saveQueue.push({ kind, generation, settle: [resolve] });
+      } else {
+        // An explicit Save As is never weakened by a concurrent ordinary Save.
+        if (kind === "saveAs") queued.kind = "saveAs";
+        queued.settle.push(resolve);
+      }
+      void drainSaves();
+    });
+
   const actions: FileActions = {
     async save() {
-      const { doc, handle, revision } = deps.snapshot();
-      if (handle === null) return actions.saveAs();
-      try {
-        await deps.store.save(handle, serialize(doc));
-        await afterWrite(handle, revision);
-        return true;
-      } catch (error) {
-        if (isCancelled(error)) return false;
-        deps.notify(`Could not save: ${(error as Error).message}`);
-        return false;
-      }
+      return requestSave("save");
     },
 
     async saveAs() {
-      const { doc, handle, revision } = deps.snapshot();
-      try {
-        const suggested = handle?.label ?? "untitled.tui";
-        const result = await deps.store.saveAs(serialize(doc), suggested);
-        await afterWrite(result.handle, revision);
-        return true;
-      } catch (error) {
-        if (isCancelled(error)) return false;
-        deps.notify(`Could not save: ${(error as Error).message}`);
-        return false;
-      }
+      return requestSave("saveAs");
     },
 
     async open() {
@@ -157,18 +261,20 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     },
 
     async tick() {
-      const { doc, handle, dirty, revision, busy } = deps.snapshot();
-      const decision = decideAutosave(autosave, { revision, at: deps.now(), busy, dirty });
-      if (decision.t !== "write") return;
+      await inPersistenceOrder(async () => {
+        const { doc, handle, dirty, revision, generation, busy } = deps.snapshot();
+        const decision = decideAutosave(autosave, { revision, at: deps.now(), busy, dirty });
+        if (decision.t !== "write") return;
 
-      try {
-        await deps.store.writeRecovery(keyFor(handle), serialize(doc));
-        // Advance only on success, so a failed write is retried next tick rather
-        // than silently skipped for good.
-        autosave = decision.state;
-      } catch (error) {
-        deps.notify(`Autosave failed: ${(error as Error).message}`);
-      }
+        try {
+          await deps.store.writeRecovery(keyFor(handle, generation), serialize(doc));
+          // Advance only on success, so a failed write is retried next tick rather
+          // than silently skipped for good.
+          autosave = decision.state;
+        } catch (error) {
+          deps.notify(`Autosave failed: ${(error as Error).message}`);
+        }
+      });
     },
 
     async listRecoveries() {
@@ -192,7 +298,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       // whatever the last real save contained. Dirty, because it exists nowhere on
       // disk — reporting it as saved would suppress the unload warning and let the
       // user lose the recovered work a second time.
-      deps.load(parsed, null, { dirty: true });
+      if (!deps.load(parsed, null, { dirty: true })) return false;
       deps.notify(`Restored an unsaved snapshot of ${info.handle.label}. Save to keep it.`);
       return true;
     },
@@ -219,7 +325,8 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     },
 
     autosaveKey() {
-      return keyFor(deps.snapshot().handle);
+      const { handle, generation } = deps.snapshot();
+      return keyFor(handle, generation);
     },
   };
 
@@ -230,8 +337,8 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       deps.notify(`${handle.label} is not a readable .tui document.`);
       return false;
     }
+    if (!deps.load(result.doc, handle)) return false;
     for (const warning of result.warnings) deps.notify(`${handle.label}: ${warning}`);
-    deps.load(result.doc, handle);
     autosave = autosaveStateAfterSave(deps.snapshot().revision, deps.now());
     return true;
   }

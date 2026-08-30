@@ -11,6 +11,7 @@
 
 import { clipRect, type Rect, type TuiDocument } from "../model/document.js";
 import { remapAllLayers } from "../model/draft.js";
+import { assertDocumentDimensions, ResourceLimitError } from "../model/resource-policy.js";
 
 export type ResizeAnchor = "top-left" | "center";
 
@@ -46,12 +47,7 @@ export function resizeDocument(
   rows: number,
   anchor: ResizeAnchor = "top-left",
 ): TuiDocument {
-  if (!Number.isInteger(cols) || cols <= 0) {
-    throw new RangeError(`cols must be a positive integer, got ${cols}`);
-  }
-  if (!Number.isInteger(rows) || rows <= 0) {
-    throw new RangeError(`rows must be a positive integer, got ${rows}`);
-  }
+  assertDocumentDimensions(cols, rows);
   if (cols === doc.cols && rows === doc.rows) return doc;
 
   const { dRow, dCol } = resizeOffset(doc, { cols, rows }, anchor);
@@ -90,11 +86,13 @@ export function shiftAll(doc: TuiDocument, dRow: number, dCol: number): TuiDocum
  * unhelpful, request.
  */
 export function cropToRect(doc: TuiDocument, rect: Rect): TuiDocument {
-  if (!Number.isInteger(rect.cols) || rect.cols <= 0) {
-    throw new RangeError(`rect.cols must be a positive integer, got ${rect.cols}`);
-  }
-  if (!Number.isInteger(rect.rows) || rect.rows <= 0) {
-    throw new RangeError(`rect.rows must be a positive integer, got ${rect.rows}`);
+  try {
+    assertDocumentDimensions(rect.cols, rect.rows);
+  } catch (error) {
+    const message = (error as Error).message
+      .replace(/^cols/u, "rect.cols")
+      .replace(/^rows/u, "rect.rows");
+    throw new (error instanceof ResourceLimitError ? ResourceLimitError : RangeError)(message);
   }
 
   const moved = remapAllLayers(doc, ({ row, col }) => {

@@ -5,7 +5,7 @@
  * locked, or the coordinates lie fully out of bounds. Partial clipping is silent.
  */
 
-import { assertNarrowChar, type Cell, type CellStyle } from "../model/cell.js";
+import { assertNarrowChar, type Cell, type CellStyle, splitGraphemes } from "../model/cell.js";
 import { inBounds, type Rect, rectCells, type TuiDocument } from "../model/document.js";
 import { withLayerDraft } from "../model/draft.js";
 
@@ -37,7 +37,7 @@ export function drawText(
   text: string,
   style: CellStyle,
 ): TuiDocument {
-  const chars = Array.from(text);
+  const chars = splitGraphemes(text);
   for (const char of chars) assertNarrowChar(char);
   if (chars.length === 0) return doc;
   return withLayerDraft(doc, layerId, (draft) => {

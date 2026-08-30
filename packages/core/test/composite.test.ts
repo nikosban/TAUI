@@ -146,6 +146,14 @@ describe("composite", () => {
   });
 });
 
+describe("public render-grid resource boundary", () => {
+  it("rejects unsafe cells and ragged grids", () => {
+    const safe = { char: "x", fg: DEFAULT_COLOR, bg: DEFAULT_COLOR } as const;
+    expect(() => gridToText([[{ ...safe, char: "\x1b" }]])).toThrow(/control/u);
+    expect(() => gridToText([[safe], [safe, safe]])).toThrow(/not 1 cells wide/u);
+  });
+});
+
 describe("toText", () => {
   it("emits one line per row, trimming trailing whitespace by default", () => {
     const doc = createDocument(8, 3, { idGen: sequentialIdGen() });

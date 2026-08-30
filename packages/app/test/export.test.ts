@@ -22,6 +22,7 @@ import {
   exportAsText,
   exportFilename,
   formatInfo,
+  MAX_PNG_EDGE,
 } from "../src/files/export.js";
 
 const STYLE = { fg: { kind: "default" }, bg: { kind: "default" } } as const;
@@ -236,5 +237,30 @@ describe("exportAsPng", () => {
       createCanvas: () => canvas,
     });
     expect([canvas.width, canvas.height]).toEqual([8, 16]);
+  });
+
+  it("rejects unsafe backing-store dimensions before allocating a canvas", async () => {
+    let created = false;
+    await expect(
+      exportAsPng(fixture(), {
+        metrics: { ...M, cellW: MAX_PNG_EDGE },
+        theme: DARK_THEME,
+        scale: 2,
+        createCanvas: () => {
+          created = true;
+          return fakeCanvas().canvas;
+        },
+      }),
+    ).rejects.toThrow(/safe export limit/u);
+    expect(created).toBe(false);
+  });
+
+  it("rejects invalid PNG scale and metrics", async () => {
+    await expect(
+      exportAsPng(fixture(), { metrics: M, theme: DARK_THEME, scale: Number.NaN }),
+    ).rejects.toThrow(/scale must be a positive finite number/u);
+    await expect(
+      exportAsPng(fixture(), { metrics: { ...M, cellH: 0 }, theme: DARK_THEME }),
+    ).rejects.toThrow(/cell metrics must be positive finite numbers/u);
   });
 });

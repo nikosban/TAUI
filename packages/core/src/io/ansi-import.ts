@@ -17,6 +17,12 @@ import { type Cell, coerceNarrowChar } from "../model/cell.js";
 import { type Color, type ColorMode, DEFAULT_COLOR } from "../model/color.js";
 import { defaultIdGen, type IdGen } from "../model/document.js";
 import { cellKey } from "../model/layer.js";
+import {
+  BoundedWarnings,
+  boundImportDimension,
+  boundImportInput,
+  RESOURCE_LIMITS,
+} from "../model/resource-policy.js";
 import type { ImportResult } from "./text-import.js";
 
 export interface ParseAnsiOptions {
@@ -70,7 +76,7 @@ function cellFrom(char: string, pen: Pen): Cell {
  * Bails out of the whole list on a malformed extended colour, so `38;5` with no
  * index is dropped rather than swallowing the following parameter as an index.
  */
-function applySgr(pen: Pen, params: readonly number[], warnings: string[]): void {
+function applySgr(pen: Pen, params: readonly number[], warnings: BoundedWarnings): void {
   for (let i = 0; i < params.length; i++) {
     const p = params[i] as number;
     switch (p) {
@@ -114,7 +120,7 @@ function applySgr(pen: Pen, params: readonly number[], warnings: string[]): void
         if (form === 5) {
           const index = params[i + 2];
           if (index === undefined) {
-            warnings.push(`truncated ${p};5 sequence, ignored`);
+            warnings.add(`truncated ${p};5 sequence, ignored`);
             return;
           }
           pen[layer] = { kind: "ansi256", index: Math.min(255, Math.max(0, index)) };
@@ -122,14 +128,14 @@ function applySgr(pen: Pen, params: readonly number[], warnings: string[]): void
         } else if (form === 2) {
           const [r, g, b] = [params[i + 2], params[i + 3], params[i + 4]];
           if (r === undefined || g === undefined || b === undefined) {
-            warnings.push(`truncated ${p};2 sequence, ignored`);
+            warnings.add(`truncated ${p};2 sequence, ignored`);
             return;
           }
           const clamp = (v: number) => Math.min(255, Math.max(0, v));
           pen[layer] = { kind: "rgb", r: clamp(r), g: clamp(g), b: clamp(b) };
           i += 4;
         } else {
-          warnings.push(`unsupported ${p};${form ?? "?"} colour form, ignored`);
+          warnings.add(`unsupported ${p};${form ?? "?"} colour form, ignored`);
           return;
         }
         break;
@@ -140,7 +146,7 @@ function applySgr(pen: Pen, params: readonly number[], warnings: string[]): void
         else if (p >= 90 && p <= 97) pen.fg = { kind: "ansi16", index: p - 90 + 8 };
         else if (p >= 40 && p <= 47) pen.bg = { kind: "ansi16", index: p - 40 };
         else if (p >= 100 && p <= 107) pen.bg = { kind: "ansi16", index: p - 100 + 8 };
-        else warnings.push(`unsupported SGR parameter ${p}, ignored`);
+        else warnings.add(`unsupported SGR parameter ${p}, ignored`);
         break;
     }
   }
@@ -158,7 +164,7 @@ interface Scan {
   readonly maxRow: number;
   readonly maxCol: number;
   readonly richest: number;
-  readonly warnings: string[];
+  readonly clippedCells: number;
 }
 
 /**
@@ -168,8 +174,7 @@ interface Scan {
  * EL entirely. {@link parseAnsi} runs this twice when the caller gave no `cols`:
  * once to learn the natural width, once to apply EL against it.
  */
-function scan(input: string, width: number | undefined): Scan {
-  const warnings: string[] = [];
+function scan(input: string, width: number | undefined, warnings: BoundedWarnings): Scan {
   const pen = freshPen();
   const cells = new Map<string, Cell>();
 
@@ -178,9 +183,19 @@ function scan(input: string, width: number | undefined): Scan {
   let maxRow = 0;
   let maxCol = 0;
   let richest = 0;
+  let clippedCells = 0;
 
   /** Records a cell and tracks the extent the grid must cover. */
   const put = (char: string, at: { row: number; col: number }, p: Pen): void => {
+    if (
+      at.row < 0 ||
+      at.row >= RESOURCE_LIMITS.documentRows ||
+      at.col < 0 ||
+      at.col >= RESOURCE_LIMITS.documentCols
+    ) {
+      clippedCells++;
+      return;
+    }
     cells.set(cellKey(at.row, at.col), cellFrom(char, p));
     maxRow = Math.max(maxRow, at.row);
     maxCol = Math.max(maxCol, at.col);
@@ -195,7 +210,7 @@ function scan(input: string, width: number | undefined): Scan {
       const consumed = readEscape(input, i);
       if (consumed === null) {
         // A lone ESC at the very end, or a sequence that never terminates.
-        warnings.push("unterminated escape sequence at end of input, ignored");
+        warnings.add("unterminated escape sequence at end of input, ignored");
         break;
       }
       i += consumed.length;
@@ -203,8 +218,8 @@ function scan(input: string, width: number | undefined): Scan {
         applySgr(pen, consumed.params, warnings);
       } else if (consumed.kind === "cup") {
         // CUP is 1-based; a missing parameter means 1.
-        row = Math.max(0, (consumed.params[0] ?? 1) - 1);
-        col = Math.max(0, (consumed.params[1] ?? 1) - 1);
+        row = Math.max(0, Math.min(RESOURCE_LIMITS.documentRows, (consumed.params[0] ?? 1) - 1));
+        col = Math.max(0, Math.min(RESOURCE_LIMITS.documentCols, (consumed.params[1] ?? 1) - 1));
       } else if (consumed.kind === "el" && width !== undefined) {
         // Erase-to-EOL paints the current background across the rest of the row.
         // This is how full-screen apps draw a status bar, so skipping it would
@@ -215,7 +230,7 @@ function scan(input: string, width: number | undefined): Scan {
     }
 
     if (ch === "\n") {
-      row++;
+      row = Math.min(RESOURCE_LIMITS.documentRows, row + 1);
       col = 0;
       i++;
       continue;
@@ -227,7 +242,7 @@ function scan(input: string, width: number | undefined): Scan {
     }
     // Control characters other than those handled above carry no cell.
     if (ch < " " && ch !== "\t") {
-      warnings.push(`skipped control character U+${ch.codePointAt(0)?.toString(16)}`);
+      warnings.add(`skipped control character U+${ch.codePointAt(0)?.toString(16)}`);
       i++;
       continue;
     }
@@ -236,13 +251,13 @@ function scan(input: string, width: number | undefined): Scan {
     // or the halves would become two replacement characters.
     const codePoint = String.fromCodePoint(input.codePointAt(i) as number);
     const { char, warning } = coerceNarrowChar(codePoint);
-    if (warning !== undefined) warnings.push(warning);
+    if (warning !== undefined) warnings.add(warning);
     put(char, { row, col }, pen);
-    col++;
+    col = Math.min(RESOURCE_LIMITS.documentCols, col + 1);
     i += codePoint.length;
   }
 
-  return { cells, maxRow, maxCol, richest, warnings };
+  return { cells, maxRow, maxCol, richest, clippedCells };
 }
 
 /**
@@ -263,14 +278,32 @@ function scan(input: string, width: number | undefined): Scan {
  * honest guess.
  */
 export function parseAnsi(input: string, opts: ParseAnsiOptions = {}): ImportResult {
-  const first = scan(input, opts.cols);
-  const naturalCols = opts.cols ?? Math.max(1, first.maxCol + 1);
+  const warnings = new BoundedWarnings();
+  const boundedInput = boundImportInput(input, warnings);
+  const explicitCols =
+    opts.cols === undefined ? undefined : boundImportDimension(opts.cols, "cols", warnings);
+  // The inference pass must not duplicate user-facing warnings when the input is
+  // scanned again to apply erase-to-EOL.
+  const firstWarnings = explicitCols === undefined ? new BoundedWarnings() : warnings;
+  const first = scan(boundedInput, explicitCols, firstWarnings);
+  const naturalCols = explicitCols ?? Math.max(1, first.maxCol + 1);
   // Re-scan only when EL could not have been applied on the first pass.
-  const final = opts.cols === undefined ? scan(input, naturalCols) : first;
+  const final = explicitCols === undefined ? scan(boundedInput, naturalCols, warnings) : first;
 
-  const { cells, maxRow, maxCol, richest, warnings } = final;
-  const cols = opts.cols ?? Math.max(1, maxCol + 1);
-  const rows = opts.rows ?? Math.max(1, maxRow + 1);
+  const { cells, maxRow, maxCol, richest } = final;
+  let cols = explicitCols ?? Math.max(1, maxCol + 1);
+  let rows = boundImportDimension(opts.rows ?? Math.max(1, maxRow + 1), "rows", warnings);
+  if (cols * rows > RESOURCE_LIMITS.documentArea) {
+    const boundedRows = Math.max(1, Math.floor(RESOURCE_LIMITS.documentArea / cols));
+    warnings.add(
+      `clipped rows from ${rows} to ${boundedRows} to fit the ${RESOURCE_LIMITS.documentArea}-cell document limit`,
+    );
+    rows = boundedRows;
+  }
+  cols = boundImportDimension(cols, "cols", warnings);
+  if (final.clippedCells > 0) {
+    warnings.add(`${final.clippedCells} cell(s) fell outside the import resource limits`);
+  }
 
   const kept: Record<string, Cell> = {};
   let dropped = 0;
@@ -285,7 +318,7 @@ export function parseAnsi(input: string, opts: ParseAnsiOptions = {}): ImportRes
     kept[key] = cell;
   }
   if (dropped > 0) {
-    warnings.push(`${dropped} cell${dropped === 1 ? "" : "s"} fell outside ${cols}×${rows}`);
+    warnings.add(`${dropped} cell${dropped === 1 ? "" : "s"} fell outside ${cols}×${rows}`);
   }
 
   const layerId = (opts.idGen ?? defaultIdGen)();
@@ -308,7 +341,7 @@ export function parseAnsi(input: string, opts: ParseAnsiOptions = {}): ImportRes
       activeLayerId: layerId,
       palette: [],
     },
-    warnings,
+    warnings: warnings.finish(),
   };
 }
 

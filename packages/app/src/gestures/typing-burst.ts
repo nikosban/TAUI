@@ -41,6 +41,7 @@ export type FlushReason =
   | "blur"
   | "undo-requested"
   | "save"
+  | "document-replacement"
   | "layer-change"
   | "selection-change";
 

@@ -41,8 +41,17 @@ let state: {
   handle: DocHandle | null;
   dirty: boolean;
   revision: number;
+  generation: number;
   busy: boolean;
 };
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function build(opts: { picker?: PickerFn; store?: FileStore } = {}): FileActions {
   return createFileActions({
@@ -55,10 +64,14 @@ function build(opts: { picker?: PickerFn; store?: FileStore } = {}): FileActions
         handle,
         dirty: opts?.dirty === true,
         revision: state.revision + 1,
+        generation: state.generation + 1,
       };
+      return true;
     },
-    markSaved: (handle) => {
-      state = { ...state, handle, dirty: false };
+    markSaved: (handle, revision, generation) => {
+      if (state.generation !== generation) return false;
+      state = { ...state, handle, dirty: state.revision !== revision };
+      return true;
     },
     now: () => clock,
     notify: (message) => notices.push(message),
@@ -81,7 +94,14 @@ beforeEach(() => {
   clock = 1_000_000;
   notices = [];
   store = createMemoryFileStore({ picker: async () => "a.tui", now: () => clock });
-  state = { doc: docWith("start"), handle: null, dirty: false, revision: 0, busy: false };
+  state = {
+    doc: docWith("start"),
+    handle: null,
+    dirty: false,
+    revision: 0,
+    generation: 0,
+    busy: false,
+  };
   actions = build();
 });
 
@@ -204,6 +224,219 @@ describe("save", () => {
     await spy.saveAs();
     expect(suggested).toBe("untitled.tui");
   });
+
+  it("keeps edits and their recovery dirty when they happen during a save", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    state = { ...state, handle };
+    edit("revision one");
+    await actions.tick();
+
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const delayed: FileStore = {
+      ...store,
+      async save(target, content) {
+        started.resolve();
+        await release.promise;
+        return store.save(target, content);
+      },
+    };
+    const racing = build({ store: delayed });
+    const saving = racing.save();
+    await started.promise;
+
+    edit("revision two");
+    // This tick is ordered behind the save, so cleanup cannot delete the newer
+    // recovery write even if both operations overlap at the UI level.
+    const recovering = racing.tick();
+    release.resolve();
+
+    expect(await saving).toBe(true);
+    await recovering;
+    expect(storedText("a.tui")).toContain("revision one");
+    expect(state.dirty).toBe(true);
+    // The pre-save snapshot was not discarded even though the disk write
+    // succeeded. The tick queued during save is interval-guarded relative to
+    // that save, so the next due tick records the newer edit.
+    expect(store.recoverySnapshot()["a.tui"]).toHaveLength(1);
+    expect(snapshotText({ content: store.recoverySnapshot()["a.tui"]?.at(-1) ?? "" })).toContain(
+      "revision one",
+    );
+
+    clock += AUTOSAVE_INTERVAL_MS;
+    await racing.tick();
+    expect(store.recoverySnapshot()["a.tui"]).toHaveLength(2);
+    expect(snapshotText({ content: store.recoverySnapshot()["a.tui"]?.at(-1) ?? "" })).toContain(
+      "revision two",
+    );
+  });
+
+  it("adopts a Save As handle without marking edits made in flight clean", async () => {
+    edit("revision one");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const delayed: FileStore = {
+      ...store,
+      async saveAs(content, suggestedName) {
+        started.resolve();
+        await release.promise;
+        return store.saveAs(content, suggestedName);
+      },
+    };
+    const racing = build({ store: delayed });
+    const saving = racing.saveAs();
+    await started.promise;
+
+    edit("revision two");
+    release.resolve();
+
+    expect(await saving).toBe(true);
+    expect(state.handle?.key).toBe("a.tui");
+    expect(state.dirty).toBe(true);
+    expect(storedText("a.tui")).toContain("revision one");
+  });
+
+  it("does not let a stale Save As completion overwrite a replacement document", async () => {
+    edit("original document");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const delayed: FileStore = {
+      ...store,
+      async saveAs(content, suggestedName) {
+        started.resolve();
+        await release.promise;
+        return store.saveAs(content, suggestedName);
+      },
+    };
+    const racing = build({ store: delayed });
+    const saving = racing.saveAs();
+    await started.promise;
+
+    const replacement = docWith("replacement document");
+    const replacementHandle = { key: "replacement.tui", label: "replacement.tui", display: "r" };
+    state = {
+      ...state,
+      doc: replacement,
+      handle: replacementHandle,
+      dirty: false,
+      revision: state.revision + 1,
+      generation: state.generation + 1,
+    };
+    release.resolve();
+
+    expect(await saving).toBe(true);
+    expect(storedText("a.tui")).toContain("original document");
+    expect(state.doc).toBe(replacement);
+    expect(state.handle).toEqual(replacementHandle);
+    expect(state.dirty).toBe(false);
+  });
+
+  it("serializes overlapping saves and coalesces queued requests", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    state = { ...state, handle };
+    edit("revision one");
+
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const writes: string[] = [];
+    let activeWrites = 0;
+    let maxActiveWrites = 0;
+    const delayed: FileStore = {
+      ...store,
+      async save(target, content) {
+        const index = writes.push(content) - 1;
+        activeWrites++;
+        maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+        if (index === 0) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else {
+          secondStarted.resolve();
+        }
+        const result = await store.save(target, content);
+        activeWrites--;
+        return result;
+      },
+    };
+    const racing = build({ store: delayed });
+    const first = racing.save();
+    await firstStarted.promise;
+
+    edit("revision two");
+    const second = racing.save();
+    const third = racing.save();
+    expect(writes).toHaveLength(1);
+
+    releaseFirst.resolve();
+    await secondStarted.promise;
+    expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
+    expect(writes).toHaveLength(2);
+    expect(maxActiveWrites).toBe(1);
+    expect(storedText("a.tui")).toContain("revision two");
+    expect(state.dirty).toBe(false);
+  });
+
+  it("does not apply a queued save request to a replacement document", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    state = { ...state, handle };
+    edit("original document");
+
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let writes = 0;
+    const delayed: FileStore = {
+      ...store,
+      async save(target, content) {
+        writes++;
+        started.resolve();
+        await release.promise;
+        return store.save(target, content);
+      },
+    };
+    const racing = build({ store: delayed });
+    const first = racing.save();
+    await started.promise;
+    const queued = racing.save();
+
+    state = {
+      ...state,
+      doc: docWith("replacement"),
+      handle: null,
+      dirty: false,
+      revision: state.revision + 1,
+      generation: state.generation + 1,
+    };
+    release.resolve();
+
+    expect(await first).toBe(true);
+    expect(await queued).toBe(false);
+    expect(writes).toBe(1);
+    expect(state.handle).toBeNull();
+  });
+
+  it.each([
+    ["recent files", "pushRecent"],
+    ["recovery data", "clearRecovery"],
+  ] as const)(
+    "does not turn a successful write into failure when %s cleanup fails",
+    async (_, op) => {
+      const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+      state = { ...state, handle };
+      edit("safely written");
+      const broken: FileStore = {
+        ...store,
+        [op]: async () => {
+          throw new FileStoreError("io", "bookkeeping unavailable");
+        },
+      };
+
+      expect(await build({ store: broken }).save()).toBe(true);
+      expect(storedText("a.tui")).toContain("safely written");
+      expect(state.dirty).toBe(false);
+      expect(notices.join()).toContain("Saved, but");
+    },
+  );
 });
 
 describe("open", () => {
@@ -238,6 +471,26 @@ describe("open", () => {
     expect(await opening.open()).toBe(false);
     expect(notices.join()).toContain("not a readable .tui document");
     expect(state.doc).toBe(before);
+  });
+
+  it("propagates a declined document replacement without changing the current one", async () => {
+    const before = state.doc;
+    const opening = createFileActions({
+      store: createMemoryFileStore({
+        picker: async () => "other.tui",
+        now: () => clock,
+        initial: { "other.tui": serialize(docWith("other")) },
+      }),
+      snapshot: () => state,
+      load: () => false,
+      markSaved: () => true,
+      now: () => clock,
+      notify: (message) => notices.push(message),
+    });
+
+    expect(await opening.open()).toBe(false);
+    expect(state.doc).toBe(before);
+    expect(notices).toEqual([]);
   });
 
   it("surfaces deserialize warnings but still opens the file", async () => {
@@ -351,6 +604,30 @@ describe("autosave", () => {
     expect(keys).toHaveLength(1);
     expect(keys[0]).toMatch(/^untitled-/u);
     expect(store.recoverySnapshot()[keys[0] as string]).toHaveLength(3);
+  });
+
+  it("keeps untitled recovery histories separate across document generations", async () => {
+    edit("first document");
+    await actions.tick();
+    const firstKey = actions.autosaveKey();
+
+    state = {
+      ...state,
+      doc: docWith("second document"),
+      handle: null,
+      dirty: false,
+      revision: state.revision + 1,
+      generation: state.generation + 1,
+    };
+    edit("second document edited");
+    await actions.tick();
+    const secondKey = actions.autosaveKey();
+
+    expect(secondKey).not.toBe(firstKey);
+    expect(Object.keys(store.recoverySnapshot()).sort()).toEqual([firstKey, secondKey].sort());
+
+    await actions.save();
+    expect(Object.keys(store.recoverySnapshot())).toEqual([firstKey]);
   });
 
   it("switches to the document's own key once it is saved", async () => {
@@ -476,6 +753,24 @@ describe("recovery", () => {
     expect(notices.join()).toContain("unreadable");
   });
 
+  it("keeps a recovery available when its document replacement is declined", async () => {
+    await withHistory();
+    const [newest] = await actions.listRecoveries();
+    const before = state.doc;
+    const declining = createFileActions({
+      store,
+      snapshot: () => state,
+      load: () => false,
+      markSaved: () => true,
+      now: () => clock,
+      notify: (message) => notices.push(message),
+    });
+
+    expect(await declining.restore(newest as RecoveryInfo)).toBe(false);
+    expect(state.doc).toBe(before);
+    expect(notices).not.toContain(expect.stringContaining("Restored"));
+  });
+
   it("discards one snapshot, leaving the rest", async () => {
     await withHistory();
     const found = await actions.listRecoveries();
@@ -544,7 +839,14 @@ describe("the crash-and-recover round trip", () => {
     await actions.tick();
 
     // A new session: fresh actions and fresh app state, same backing store.
-    state = { doc: docWith(""), handle: null, dirty: false, revision: 0, busy: false };
+    state = {
+      doc: docWith(""),
+      handle: null,
+      dirty: false,
+      revision: 0,
+      generation: 0,
+      busy: false,
+    };
     const relaunched = build();
 
     const found = await relaunched.listRecoveries();
@@ -558,7 +860,14 @@ describe("the crash-and-recover round trip", () => {
     await actions.tick();
     await actions.save();
 
-    state = { doc: docWith(""), handle: null, dirty: false, revision: 0, busy: false };
+    state = {
+      doc: docWith(""),
+      handle: null,
+      dirty: false,
+      revision: 0,
+      generation: 0,
+      busy: false,
+    };
     expect(await build().listRecoveries()).toEqual([]);
   });
 });

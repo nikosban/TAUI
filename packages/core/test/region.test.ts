@@ -132,6 +132,15 @@ describe("pasteRegion", () => {
     expect(toText(next)).not.toContain("!");
     expect(toText(next)).not.toContain("?");
   });
+
+  it("rejects terminal controls in a programmatic clipboard before pasting", () => {
+    const clip = {
+      rows: 1,
+      cols: 1,
+      cells: { "0,0": { char: "\x1b", ...STYLE } },
+    };
+    expect(() => pasteRegion(doc, id, { row: 0, col: 0 }, clip)).toThrow(/control/u);
+  });
 });
 
 describe("moveRegion", () => {

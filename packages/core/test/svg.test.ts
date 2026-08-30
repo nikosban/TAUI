@@ -36,6 +36,17 @@ describe("document structure", () => {
     expect(svg).toContain(`font-size="17"`);
   });
 
+  it("rejects invalid metrics before emitting malformed or unbounded geometry", () => {
+    for (const options of [
+      { cellW: 0 },
+      { cellH: Number.POSITIVE_INFINITY },
+      { fontSize: Number.NaN },
+      { baseline: -1 },
+    ]) {
+      expect(() => toSvg(doc(2, 2), options), JSON.stringify(options)).toThrow(/finite positive/u);
+    }
+  });
+
   it("declares the SVG namespace and a monospace stack", () => {
     const svg = toSvg(doc(2, 1));
     expect(svg).toContain(`xmlns="http://www.w3.org/2000/svg"`);

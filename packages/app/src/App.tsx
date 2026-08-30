@@ -1,6 +1,8 @@
 import {
+  assertDocumentDimensions,
   cellsLostOnResize,
   colorRefEquals,
+  RESOURCE_LIMITS,
   type Rect,
   resizeDocument,
   setActiveLayer,
@@ -24,6 +26,7 @@ import { DARK_THEME } from "./canvas/theme.js";
 import { useCanvasPainter } from "./canvas/use-canvas.js";
 import { ExportDialog } from "./files/ExportDialog.js";
 import { PickerDialog, RecoveryDialog, usePicker } from "./files/FileDialogs.js";
+import { createReplacementPolicy } from "./files/replacement-policy.js";
 import { createGestureController, type PointerEventLike } from "./gestures/controller.js";
 import type { Modifiers, ToolId } from "./gestures/gesture.js";
 import { InspectorPanel } from "./inspect/InspectorPanel.js";
@@ -115,6 +118,7 @@ export function App(): React.JSX.Element {
   const [dragRect, setDragRect] = useState<Rect | null>(null);
   const [caret, setCaret] = useState<CellPos | null>(null);
   const [anchor, setAnchor] = useState<"top-left" | "center">("top-left");
+  const [templateId, setTemplateId] = useState(params.get("template") ?? "dashboard");
 
   /**
    * True while the keyboard belongs to the text tool rather than to shortcuts.
@@ -275,6 +279,41 @@ export function App(): React.JSX.Element {
     [picker],
   );
 
+  /**
+   * The single adoption boundary for opened files, templates, and recoveries.
+   *
+   * A file picker is allowed to fail or be cancelled before reaching here. Once a
+   * valid replacement arrives, the dirty prompt runs before any interaction state
+   * changes. Accepted replacements flush typing, cancel pointer previews, and clear
+   * every transient tied to the old grid.
+   */
+  const replacement = useMemo(
+    () =>
+      createReplacementPolicy({
+        hasUnsavedChanges: () => documentStore.getState().dirty || scratchRef.current !== null,
+        confirmDiscard: askConfirm,
+        settleInteractions: () => controller.settleDocumentReplacement(),
+        clearTransientState: () => {
+          scratchRef.current = null;
+          setDragRect(null);
+          setCaret(null);
+          setHover(null);
+          setSpaceHeld(false);
+          panRef.current = null;
+          const toolStore = useToolStore.getState();
+          toolStore.setSelection(null);
+          // A clipboard is document-relative; carrying it across files makes a
+          // replacement appear to retain hidden state from the old document.
+          toolStore.setClipboard(null);
+        },
+        adopt: (next, handle, opts) => {
+          documentStore.getState().load(next, handle);
+          if (opts?.dirty === true) documentStore.getState().markDirty();
+        },
+      }),
+    [askConfirm, controller],
+  );
+
   const files = useMemo(
     () =>
       createFileActions({
@@ -286,24 +325,20 @@ export function App(): React.JSX.Element {
             handle: state.handle,
             dirty: state.dirty,
             revision: state.revision,
+            generation: state.generation,
             // Typing counts as busy: `preview` bumps the revision per keystroke,
             // so a burst would otherwise look like a settled state and get
             // snapshotted half-typed.
             busy: controller.isActive() || controller.isTyping(),
           };
         },
-        load: (doc, handle, opts) => {
-          controller.cancel();
-          setCaret(null);
-          useToolStore.getState().setSelection(null);
-          documentStore.getState().load(doc, handle);
-          if (opts?.dirty === true) documentStore.getState().markDirty();
-        },
-        markSaved: (handle) => documentStore.getState().markSaved(handle),
+        load: (next, handle, opts) => replacement.replace(next, handle, opts),
+        markSaved: (handle, revision, generation) =>
+          documentStore.getState().markSaved(handle, revision, generation),
         now: () => Date.now(),
         notify,
       }),
-    [store, controller, notify],
+    [store, controller, notify, replacement],
   );
 
   /** Autosave poll. Separate from the gesture tick: minutes, not milliseconds. */
@@ -444,15 +479,19 @@ export function App(): React.JSX.Element {
       } else if (id === "file.export") {
         controller.flushTyping("save");
         setExporting(true);
-      } else if (id === "file.save" || id === "file.saveAs" || id === "file.open") {
+      } else if (id === "file.save" || id === "file.saveAs") {
         // Flush any burst so the document being written includes the last
         // characters typed, and close a gesture so a preview is not saved.
         controller.flushTyping("save");
         if (controller.isActive()) controller.cancel();
         setCaret(null);
         if (id === "file.save") void files.save();
-        else if (id === "file.saveAs") void files.saveAs();
-        else void files.open();
+        else void files.saveAs();
+      } else if (id === "file.open") {
+        // Do not touch typing or gesture state before the picker resolves. A
+        // cancelled or failed open must leave the current editing session intact;
+        // a valid document reaches the shared replacement policy above.
+        void files.open();
       } else if (id === "edit.copy" || id === "edit.cut" || id === "edit.paste") {
         // Editing text and placing a paste are both modal states that own the
         // pointer or the keyboard, so leaving edit mode first keeps them from
@@ -529,7 +568,12 @@ export function App(): React.JSX.Element {
    * undo — so the count is shown before it happens rather than after.
    */
   const applyResize = (cols: number, rows: number): void => {
-    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1) return;
+    try {
+      assertDocumentDimensions(cols, rows);
+    } catch (error) {
+      notify(`Resize rejected: ${(error as Error).message}`);
+      return;
+    }
     const current = documentStore.getState().present();
     const lost = cellsLostOnResize(current, cols, rows, anchor);
     if (lost > 0) {
@@ -595,11 +639,10 @@ export function App(): React.JSX.Element {
         <label>
           template{" "}
           <select
-            defaultValue={params.get("template") ?? "dashboard"}
+            value={templateId}
             onChange={(e) => {
-              scratchRef.current = null;
-              documentStore.getState().load(templateById(e.target.value).build(), null);
-              useToolStore.getState().setSelection(null);
+              const nextId = e.target.value;
+              if (replacement.replace(templateById(nextId).build(), null)) setTemplateId(nextId);
             }}
           >
             {TEMPLATES.map((t) => (
@@ -813,7 +856,7 @@ export function App(): React.JSX.Element {
               <input
                 type="number"
                 min={1}
-                max={400}
+                max={RESOURCE_LIMITS.documentCols}
                 value={doc.cols}
                 onChange={(e) => applyResize(Number(e.target.value), doc.rows)}
               />
@@ -823,7 +866,7 @@ export function App(): React.JSX.Element {
               <input
                 type="number"
                 min={1}
-                max={200}
+                max={RESOURCE_LIMITS.documentRows}
                 value={doc.rows}
                 onChange={(e) => applyResize(doc.cols, Number(e.target.value))}
               />
@@ -869,7 +912,9 @@ export function App(): React.JSX.Element {
           snapshots={recoveries}
           now={Date.now()}
           onRestore={(info) => {
-            void files.restore(info).then(() => setRecoveries(null));
+            void files.restore(info).then((restored) => {
+              if (restored) setRecoveries(null);
+            });
           }}
           onDiscardAll={() => {
             void files.discardAll().then(() => setRecoveries(null));

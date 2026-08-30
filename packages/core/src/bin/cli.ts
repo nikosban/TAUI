@@ -13,11 +13,14 @@
  * three lines in the GUI (canvas → blob) and a dependency tarpit headlessly.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   deserialize,
   parseAnsi,
   parseText,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
   serialize,
   type TuiDocument,
   toAnsi,
@@ -90,7 +93,7 @@ function formatOf(flags: ReadonlySet<string>): "ansi" | "svg" | "text" {
 
 function positiveInt(raw: string, label: string): number {
   const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new UsageError(`${label} must be a positive integer, got ${JSON.stringify(raw)}`);
   }
   return value;
@@ -107,7 +110,8 @@ export function renderDocument(doc: TuiDocument, format: "ansi" | "svg" | "text"
 const hasEscapes = (input: string): boolean => input.includes("\x1b");
 
 export interface Io {
-  readonly readFile: (path: string) => string;
+  /** Implementations should reject the file before reading when it exceeds maxBytes. */
+  readonly readFile: (path: string, maxBytes: number) => string;
   readonly writeFile: (path: string, data: string) => void;
   readonly stdout: (data: string) => void;
   readonly stderr: (data: string) => void;
@@ -138,7 +142,7 @@ export function run(argv: readonly string[], io: Io): number {
       case "render": {
         const path = args.positional[0];
         if (path === undefined) throw new UsageError("render needs a file");
-        const { doc, warnings } = deserialize(io.readFile(path));
+        const { doc, warnings } = deserialize(io.readFile(path, RESOURCE_LIMITS.documentTextChars));
         for (const warning of warnings) io.stderr(`warning: ${warning}\n`);
         const output = renderDocument(doc, formatOf(args.flags));
         const out = args.options.get("out");
@@ -150,7 +154,7 @@ export function run(argv: readonly string[], io: Io): number {
       case "import": {
         const path = args.positional[0];
         if (path === undefined) throw new UsageError("import needs a file");
-        const raw = io.readFile(path);
+        const raw = io.readFile(path, RESOURCE_LIMITS.importTextChars);
         const colsRaw = args.options.get("cols");
         const cols = colsRaw === undefined ? undefined : positiveInt(colsRaw, "--cols");
         // A capture with no escapes is plain ASCII art, and parseText keeps its
@@ -182,10 +186,27 @@ export function run(argv: readonly string[], io: Io): number {
   }
 }
 
+/** Works both as `node dist/bin/cli.js` and through the package's `tui-designer` symlink. */
+function isMainModule(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  try {
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
 /* c8 ignore start -- the process shell; `run` above holds all the logic. */
-if (process.argv[1]?.includes("cli") === true) {
+if (isMainModule()) {
   const code = run(process.argv.slice(2), {
-    readFile: (path) => readFileSync(path, "utf8"),
+    readFile: (path, maxBytes) => {
+      const bytes = statSync(path).size;
+      if (bytes > maxBytes) {
+        throw new ResourceLimitError(`input file is ${bytes} bytes; limit is ${maxBytes}`);
+      }
+      return readFileSync(path, "utf8");
+    },
     writeFile: (path, data) => writeFileSync(path, data, "utf8"),
     stdout: (data) => process.stdout.write(data),
     stderr: (data) => process.stderr.write(data),

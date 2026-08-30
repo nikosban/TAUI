@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   FileStoreError,
   isCancelled,
+  MAX_DOCUMENT_BYTES,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
 } from "../src/ports/file-store.js";
@@ -59,6 +60,7 @@ class FakeDir {
         return {
           text: async () => file.content,
           lastModified: file.lastModified,
+          size: file.content.length,
         };
       },
       async createWritable() {
@@ -167,6 +169,15 @@ describe("save and open", () => {
     await expect(store.openHandle(handle("ghost.tui"))).rejects.toMatchObject({
       code: "not-found",
     });
+  });
+
+  it("rejects an oversized document before reading its text", async () => {
+    const docs = await root.getDirectoryHandle("docs", { create: true });
+    docs.files.set("huge.tui", {
+      content: "x".repeat(MAX_DOCUMENT_BYTES + 1),
+      lastModified: now(),
+    });
+    await expect(store.openHandle(handle("huge.tui"))).rejects.toThrow(/document size limit/u);
   });
 
   it("advances the modification time on save", async () => {

@@ -8,6 +8,7 @@ import {
   sequentialIdGen,
   type TuiDocument,
 } from "../src/model/document.js";
+import { RESOURCE_LIMITS } from "../src/model/resource-policy.js";
 import {
   cellsLostOnCrop,
   cellsLostOnResize,
@@ -109,6 +110,12 @@ describe("resizeDocument — validation and identity", () => {
     expect(() => resizeDocument(doc, 0, 4)).toThrow(/cols must be a positive integer/u);
     expect(() => resizeDocument(doc, 6, -1)).toThrow(/rows must be a positive integer/u);
     expect(() => resizeDocument(doc, 6.5, 4)).toThrow(/cols must be a positive integer/u);
+  });
+
+  it("rejects dimensions and areas beyond the central resource policy", () => {
+    expect(() => resizeDocument(doc, RESOURCE_LIMITS.documentCols + 1, 1)).toThrow(/limit/u);
+    expect(() => resizeDocument(doc, 501, 500)).toThrow(/document area/u);
+    expect(() => resizeDocument(doc, Number.MAX_SAFE_INTEGER + 1, 1)).toThrow(/positive integer/u);
   });
 
   it("returns the same document when the size is unchanged", () => {
@@ -253,6 +260,14 @@ describe("cropToRect", () => {
     expect(() => cropToRect(doc, { top: 0, left: 0, rows: 2, cols: -1 })).toThrow(
       /rect.cols must be a positive integer/u,
     );
+    expect(() =>
+      cropToRect(doc, {
+        top: 0,
+        left: 0,
+        rows: 1,
+        cols: RESOURCE_LIMITS.documentCols + 1,
+      }),
+    ).toThrow(/rect.cols exceeds/u);
   });
 
   it("reports how many cells a crop would discard", () => {

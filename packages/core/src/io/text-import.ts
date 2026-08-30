@@ -13,6 +13,12 @@ import { type Cell, coerceToCells } from "../model/cell.js";
 import { type ColorMode, DEFAULT_COLOR } from "../model/color.js";
 import { defaultIdGen, type IdGen, type TuiDocument } from "../model/document.js";
 import { cellKey } from "../model/layer.js";
+import {
+  BoundedWarnings,
+  boundImportDimension,
+  boundImportInput,
+  RESOURCE_LIMITS,
+} from "../model/resource-policy.js";
 
 export interface ImportResult {
   readonly doc: TuiDocument;
@@ -41,28 +47,47 @@ function splitLines(input: string): string[] {
 }
 
 export function parseText(input: string, opts: ParseTextOptions = {}): ImportResult {
-  const warnings: string[] = [];
-  const lines = splitLines(input);
+  const warningSink = new BoundedWarnings();
+  const boundedInput = boundImportInput(input, warningSink);
+  const allLines = splitLines(boundedInput);
+  const lines = allLines.slice(0, RESOURCE_LIMITS.documentRows);
+  if (allLines.length > lines.length) {
+    warningSink.add(
+      `clipped ${allLines.length - lines.length} row(s) beyond the limit ${RESOURCE_LIMITS.documentRows}`,
+    );
+  }
 
   // Coerce first: grid width must be measured in *cells*, not code units, or a
   // substituted character would throw the width off.
   const rowChars = lines.map((line) => {
-    const { chars, warnings: lineWarnings } = coerceToCells(line);
-    warnings.push(...lineWarnings);
+    const { chars, warnings: lineWarnings } = coerceToCells(line, RESOURCE_LIMITS.importWarnings);
+    warningSink.append(lineWarnings);
     return chars;
   });
 
   const widest = rowChars.reduce((max, chars) => Math.max(max, chars.length), 0);
-  const cols = opts.cols ?? Math.max(1, widest);
-  const rows = opts.rows ?? Math.max(1, rowChars.length);
+  const requestedCols = opts.cols ?? Math.max(1, Math.min(widest, RESOURCE_LIMITS.documentCols));
+  const requestedRows = opts.rows ?? Math.max(1, rowChars.length);
+  const cols = boundImportDimension(requestedCols, "cols", warningSink);
+  let rows = boundImportDimension(requestedRows, "rows", warningSink);
+  if (cols * rows > RESOURCE_LIMITS.documentArea) {
+    const boundedRows = Math.max(1, Math.floor(RESOURCE_LIMITS.documentArea / cols));
+    warningSink.add(
+      `clipped rows from ${rows} to ${boundedRows} to fit the ${RESOURCE_LIMITS.documentArea}-cell document limit`,
+    );
+    rows = boundedRows;
+  }
 
   if (opts.cols !== undefined && widest > opts.cols) {
-    warnings.push(
+    warningSink.add(
       `clipped ${widest - opts.cols} column(s) beyond the requested width ${opts.cols}`,
     );
   }
+  if (opts.cols === undefined && widest > cols) {
+    warningSink.add(`clipped ${widest - cols} column(s) beyond the limit ${cols}`);
+  }
   if (opts.rows !== undefined && rowChars.length > opts.rows) {
-    warnings.push(`clipped ${rowChars.length - opts.rows} row(s) beyond the requested height`);
+    warningSink.add(`clipped ${rowChars.length - opts.rows} row(s) beyond the requested height`);
   }
 
   const cells: Record<string, Cell> = {};
@@ -94,6 +119,6 @@ export function parseText(input: string, opts: ParseTextOptions = {}): ImportRes
       activeLayerId: id,
       palette: [],
     },
-    warnings,
+    warnings: warningSink.finish(),
   };
 }

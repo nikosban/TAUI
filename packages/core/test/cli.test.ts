@@ -8,7 +8,14 @@
 
 import { describe, expect, it } from "vitest";
 import { type Io, parseArgs, renderDocument, run } from "../src/bin/cli.js";
-import { createDocument, drawBox, drawText, sequentialIdGen, serialize } from "../src/index.js";
+import {
+  createDocument,
+  drawBox,
+  drawText,
+  RESOURCE_LIMITS,
+  sequentialIdGen,
+  serialize,
+} from "../src/index.js";
 
 const STYLE = { fg: { kind: "default" }, bg: { kind: "default" } } as const;
 
@@ -17,8 +24,10 @@ function harness(files: Record<string, string> = {}) {
   const written = new Map<string, string>();
   let out = "";
   let err = "";
+  const readLimits = new Map<string, number>();
   const io: Io = {
-    readFile: (path) => {
+    readFile: (path, maxBytes) => {
+      readLimits.set(path, maxBytes);
       const found = files[path];
       if (found === undefined) throw new Error(`ENOENT: ${path}`);
       return found;
@@ -36,6 +45,7 @@ function harness(files: Record<string, string> = {}) {
   return {
     io,
     written,
+    readLimits,
     get out() {
       return out;
     },
@@ -181,9 +191,31 @@ describe("render", () => {
     expect(h.err).toContain("warning:");
     expect(h.out).toContain("┌");
   });
+
+  it("escapes hostile layer ids in warnings before writing to the terminal", () => {
+    const doc = JSON.parse(fixture());
+    doc.layers[0].id = "\x1b]8;;https://evil.invalid\x07click";
+    doc.activeLayerId = "missing";
+    const h = harness({ "a.tui": JSON.stringify(doc) });
+    expect(run(["render", "a.tui", "--text"], h.io)).toBe(0);
+    expect(h.err).not.toContain("\x1b");
+    expect(h.err).not.toContain("\x07");
+    expect(h.err).toContain("\\u001b");
+  });
+
+  it("requests a bounded preflight read for document files", () => {
+    const h = harness({ "a.tui": fixture() });
+    expect(run(["render", "a.tui", "--text"], h.io)).toBe(0);
+    expect(h.readLimits.get("a.tui")).toBe(RESOURCE_LIMITS.documentTextChars);
+  });
 });
 
 describe("import", () => {
+  it("requests the stricter import preflight limit", () => {
+    const h = harness({ "cap.txt": "x" });
+    expect(run(["import", "cap.txt"], h.io)).toBe(0);
+    expect(h.readLimits.get("cap.txt")).toBe(RESOURCE_LIMITS.importTextChars);
+  });
   it("parses an ANSI capture into a .tui document", () => {
     const h = harness({ "cap.ans": "\x1b[31mred\x1b[0m\nplain\n" });
     expect(run(["import", "cap.ans", "-o", "out.tui"], h.io)).toBe(0);

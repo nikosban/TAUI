@@ -22,6 +22,11 @@ import {
 } from "../model/color.js";
 import { defaultIdGen, type IdGen, type TuiDocument } from "../model/document.js";
 import { mapAllCells } from "../model/draft.js";
+import {
+  assertBoundedString,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
+} from "../model/resource-policy.js";
 
 export interface AddPaletteEntryOptions {
   readonly idGen?: IdGen;
@@ -53,12 +58,18 @@ export function addPaletteEntry(
   opts: AddPaletteEntryOptions = {},
 ): TuiDocument {
   assertValidColor(color);
+  if (doc.palette.length >= RESOURCE_LIMITS.paletteEntries) {
+    throw new ResourceLimitError(`palette cannot exceed ${RESOURCE_LIMITS.paletteEntries} entries`);
+  }
+  assertBoundedString(name, "palette name", RESOURCE_LIMITS.nameChars);
   const id = (opts.idGen ?? defaultIdGen)();
+  assertBoundedString(id, "palette id", RESOURCE_LIMITS.idChars);
   return { ...doc, palette: [...doc.palette, { id, name, color }] };
 }
 
 /** Renames an entry. **Touches no cells.** */
 export function renamePaletteEntry(doc: TuiDocument, id: string, name: string): TuiDocument {
+  assertBoundedString(name, "palette name", RESOURCE_LIMITS.nameChars);
   const entry = findPaletteEntry(doc, id);
   if (entry === undefined || entry.name === name) return doc;
   return {

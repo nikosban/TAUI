@@ -17,6 +17,11 @@
 import type { Cell } from "../model/cell.js";
 import { defaultIdGen, type IdGen, type TuiDocument } from "../model/document.js";
 import { createLayer, type Layer } from "../model/layer.js";
+import {
+  assertBoundedString,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
+} from "../model/resource-policy.js";
 
 interface Located {
   readonly index: number;
@@ -66,6 +71,9 @@ export interface AddLayerOptions {
 }
 
 export function addLayer(doc: TuiDocument, opts: AddLayerOptions = {}): TuiDocument {
+  if (doc.layers.length >= RESOURCE_LIMITS.layers) {
+    throw new ResourceLimitError(`layers cannot exceed ${RESOURCE_LIMITS.layers}`);
+  }
   const idGen = opts.idGen ?? defaultIdGen;
   const name = opts.name ?? `Layer ${doc.layers.length + 1}`;
   const layer = createLayer(idGen(), name);
@@ -102,12 +110,19 @@ export function duplicateLayer(
 ): TuiDocument {
   const found = locate(doc, layerId);
   if (found === null) return doc;
+  if (doc.layers.length >= RESOURCE_LIMITS.layers) {
+    throw new ResourceLimitError(`layers cannot exceed ${RESOURCE_LIMITS.layers}`);
+  }
 
   const idGen = opts.idGen ?? defaultIdGen;
+  const id = idGen();
+  const name = opts.name ?? `${found.layer.name} copy`;
+  assertBoundedString(id, "layer id", RESOURCE_LIMITS.idChars);
+  assertBoundedString(name, "layer name", RESOURCE_LIMITS.nameChars);
   const copy: Layer = {
     ...found.layer,
-    id: idGen(),
-    name: opts.name ?? `${found.layer.name} copy`,
+    id,
+    name,
   };
   const layers = doc.layers.slice();
   layers.splice(found.index + 1, 0, copy);
@@ -159,6 +174,7 @@ export function moveLayer(doc: TuiDocument, layerId: string, toIndex: number): T
 }
 
 export function renameLayer(doc: TuiDocument, layerId: string, name: string): TuiDocument {
+  assertBoundedString(name, "layer name", RESOURCE_LIMITS.nameChars);
   return updateLayer(doc, layerId, (layer) => (layer.name === name ? layer : { ...layer, name }));
 }
 

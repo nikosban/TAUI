@@ -5,6 +5,7 @@
 import type { Cell } from "./cell.js";
 import type { ColorMode, PaletteEntry } from "./color.js";
 import { cellKey, createLayer, type Layer } from "./layer.js";
+import { assertDocumentDimensions } from "./resource-policy.js";
 
 export const CURRENT_VERSION = 1 as const;
 
@@ -55,12 +56,7 @@ export function createDocument(
   rows: number,
   opts: CreateDocumentOptions = {},
 ): TuiDocument {
-  if (!Number.isInteger(cols) || cols <= 0) {
-    throw new RangeError(`cols must be a positive integer, got ${cols}`);
-  }
-  if (!Number.isInteger(rows) || rows <= 0) {
-    throw new RangeError(`rows must be a positive integer, got ${rows}`);
-  }
+  assertDocumentDimensions(cols, rows);
   const idGen = opts.idGen ?? defaultIdGen;
   const layer = createLayer(idGen(), opts.layerName ?? "Layer 1");
   return {

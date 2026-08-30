@@ -175,6 +175,20 @@ describe("preview lifecycle", () => {
     expect(documentStore.getState().canUndo()).toBe(false);
   });
 
+  it("settles a document replacement by cancelling its pointer preview", () => {
+    const before = documentStore.getState().history.present;
+    controller.onPointerDown(pointerAt(0, 0));
+    controller.onPointerMove(pointerAt(4, 8));
+    expect(scratch).not.toBeNull();
+
+    controller.settleDocumentReplacement();
+
+    expect(scratch).toBeNull();
+    expect(dragRect).toBeNull();
+    expect(controller.isActive()).toBe(false);
+    expect(documentStore.getState().history.present).toBe(before);
+  });
+
   it("keeps the preview derived from the committed present, not the last preview", () => {
     // Sweeping out and back must leave the small box, not a compound of both.
     controller.onPointerDown(pointerAt(0, 0));
@@ -483,7 +497,53 @@ describe("store hygiene", () => {
   it("marks the document dirty on commit and clean after markSaved", () => {
     drag([0, 0], [2, 3]);
     expect(documentStore.getState().dirty).toBe(true);
-    documentStore.getState().markSaved({ key: "k", label: "k", display: "k" });
+    documentStore
+      .getState()
+      .markSaved(
+        { key: "k", label: "k", display: "k" },
+        documentStore.getState().revision,
+        documentStore.getState().generation,
+      );
+    expect(documentStore.getState().dirty).toBe(false);
+  });
+
+  it("does not mark a newer revision clean when an older save completes", () => {
+    drag([0, 0], [2, 3]);
+    const writtenRevision = documentStore.getState().revision;
+    drag([4, 4], [5, 5]);
+    const handle = { key: "k", label: "k", display: "k" };
+
+    documentStore
+      .getState()
+      .markSaved(handle, writtenRevision, documentStore.getState().generation);
+    expect(documentStore.getState().handle).toEqual(handle);
+    expect(documentStore.getState().dirty).toBe(true);
+
+    documentStore
+      .getState()
+      .markSaved(handle, documentStore.getState().revision, documentStore.getState().generation);
+    expect(documentStore.getState().dirty).toBe(false);
+  });
+
+  it("ignores a save acknowledgement from a replaced document generation", () => {
+    drag([0, 0], [2, 3]);
+    const savedRevision = documentStore.getState().revision;
+    const savedGeneration = documentStore.getState().generation;
+    const replacementHandle = { key: "replacement", label: "replacement", display: "replacement" };
+    documentStore
+      .getState()
+      .load(createDocument(DOC_COLS, DOC_ROWS, { idGen: sequentialIdGen() }), replacementHandle);
+
+    expect(
+      documentStore
+        .getState()
+        .markSaved(
+          { key: "stale", label: "stale", display: "stale" },
+          savedRevision,
+          savedGeneration,
+        ),
+    ).toBe(false);
+    expect(documentStore.getState().handle).toEqual(replacementHandle);
     expect(documentStore.getState().dirty).toBe(false);
   });
 

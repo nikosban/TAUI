@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canonical, deserialize, serialize, TuiParseError } from "../src/io/file.js";
 import { DEFAULT_COLOR } from "../src/model/color.js";
 import { createDocument, sequentialIdGen, type TuiDocument } from "../src/model/document.js";
+import { RESOURCE_LIMITS, ResourceLimitError } from "../src/model/resource-policy.js";
 import { drawText, fillRect, setCell } from "../src/ops/draw.js";
 import { toText } from "../src/render/text.js";
 
@@ -62,6 +63,15 @@ describe("canonical", () => {
     expect(() => canonical({ a: Number.NaN })).toThrow(TuiParseError);
     expect(() => canonical({ a: Number.POSITIVE_INFINITY })).toThrow(TuiParseError);
     expect(() => canonical({ a: () => 1 })).toThrow(TuiParseError);
+  });
+
+  it("handles __proto__ as inert data instead of mutating the output prototype", () => {
+    const input = JSON.parse('{"__proto__":{"polluted":true},"safe":1}');
+    const output = canonical(input) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(output)).toBeNull();
+    expect(Object.hasOwn(output, "__proto__")).toBe(true);
+    expect(JSON.stringify(output)).toBe('{"__proto__":{"polluted":true},"safe":1}');
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });
 
@@ -185,6 +195,19 @@ describe("deserialize", () => {
     expect(result.warnings).toEqual([expect.stringMatching(/malformed cell key/u)]);
   });
 
+  it("bounds repair warnings from hostile sparse cell maps", () => {
+    const doc = JSON.parse(serialize(richDocument()));
+    doc.layers[0].cells = Object.fromEntries(
+      Array.from({ length: RESOURCE_LIMITS.importWarnings + 5 }, (_, index) => [
+        `malformed-${index}`,
+        { char: "x", fg: { kind: "default" }, bg: { kind: "default" } },
+      ]),
+    );
+    const result = deserialize(JSON.stringify(doc));
+    expect(result.warnings).toHaveLength(RESOURCE_LIMITS.importWarnings + 1);
+    expect(result.warnings.at(-1)).toBe("omitted 5 additional warning(s)");
+  });
+
   it("bakes dangling palette references to the terminal default", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.palette = []; // every ref is now dangling
@@ -243,6 +266,86 @@ describe("deserialize", () => {
     const doc2 = JSON.parse(serialize(richDocument()));
     doc2.layers[0].cells["0,0"].bold = "yes";
     expect(() => deserialize(JSON.stringify(doc2))).toThrow(/bold must be a boolean/u);
+  });
+
+  it("rejects terminal-control injection and unsafe multi-character cells", () => {
+    const withChar = (char: string) => {
+      const doc = JSON.parse(serialize(richDocument()));
+      doc.layers[0].cells["0,0"].char = char;
+      return JSON.stringify(doc);
+    };
+    for (const char of ["\x1b", "\x9b", "\x07", "\x1b[31m", "ab", "\u202e"]) {
+      expect(() => deserialize(withChar(char)), JSON.stringify(char)).toThrow(TuiParseError);
+    }
+  });
+
+  it("drops all out-of-bounds coordinates before validating their cell payload", () => {
+    const doc = JSON.parse(serialize(richDocument()));
+    doc.layers[0].cells["-1,0"] = { char: "\x1b", fg: {}, bg: {} };
+    doc.layers[0].cells["999999999999,0"] = { char: "\x1b", fg: {}, bg: {} };
+    const result = deserialize(JSON.stringify(doc));
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/out-of-bounds cell key/u),
+      expect.stringMatching(/out-of-bounds cell key/u),
+    ]);
+    expect(result.doc.layers[0]?.cells["-1,0"]).toBeUndefined();
+  });
+
+  it("rejects oversized dimensions, layer counts, palettes, strings, and source text", () => {
+    const raw = JSON.parse(serialize(richDocument()));
+    expect(() =>
+      deserialize(JSON.stringify({ ...raw, cols: RESOURCE_LIMITS.documentCols + 1 })),
+    ).toThrow(/cols exceeds/u);
+    expect(() => deserialize(JSON.stringify({ ...raw, cols: 501, rows: 500 }))).toThrow(
+      /document area/u,
+    );
+    expect(() =>
+      deserialize(
+        JSON.stringify({
+          ...raw,
+          layers: Array.from({ length: RESOURCE_LIMITS.layers + 1 }, (_, index) => ({
+            ...raw.layers[0],
+            id: `l${index}`,
+          })),
+        }),
+      ),
+    ).toThrow(/layers exceeds/u);
+    expect(() =>
+      deserialize(
+        JSON.stringify({
+          ...raw,
+          palette: Array.from({ length: RESOURCE_LIMITS.paletteEntries + 1 }, (_, index) => ({
+            id: `p${index}`,
+            name: "p",
+            color: { kind: "default" },
+          })),
+        }),
+      ),
+    ).toThrow(/palette exceeds/u);
+    raw.layers[0].name = "n".repeat(RESOURCE_LIMITS.nameChars + 1);
+    expect(() => deserialize(JSON.stringify(raw))).toThrow(/name exceeds/u);
+    raw.layers[0].name = "Layer 1";
+    raw.activeLayerId = "a".repeat(RESOURCE_LIMITS.idChars + 1);
+    expect(() => deserialize(JSON.stringify(raw))).toThrow(/activeLayerId exceeds/u);
+    expect(() => deserialize(" ".repeat(RESOURCE_LIMITS.documentTextChars + 1))).toThrow(
+      /document text exceeds/u,
+    );
+  });
+
+  it("guards serialization of unsafe hand-constructed documents", () => {
+    const unsafe: TuiDocument = {
+      ...richDocument(),
+      layers: [
+        {
+          ...richDocument().layers[0]!,
+          cells: {
+            "0,0": { char: "\x1b", fg: DEFAULT_COLOR, bg: DEFAULT_COLOR },
+          },
+        },
+      ],
+    };
+    expect(() => serialize(unsafe)).toThrow(/control/u);
+    expect(() => serialize(createDocument(501, 500))).toThrow(ResourceLimitError);
   });
 });
 

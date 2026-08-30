@@ -54,6 +54,13 @@ export interface RecentEntry {
  */
 export const RECOVERY_HISTORY_LIMIT = 10;
 
+/**
+ * Backend preflight for untrusted document and recovery files.
+ * Core also enforces a character limit after decoding; this byte limit prevents
+ * OPFS from first materialising an arbitrarily large file as a JavaScript string.
+ */
+export const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+
 export interface RecoveryInfo {
   /**
    * Identity of this snapshot, unique across the whole store.

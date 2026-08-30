@@ -38,6 +38,12 @@ describe("drawText", () => {
     expect(toText(next)).toBe("   hel\n\n");
   });
 
+  it("stores a combining grapheme in one cell", () => {
+    const next = drawText(doc, layerId, 0, 0, "éx", STYLE);
+    expect(next.layers[0]?.cells["0,0"]?.char).toBe("é");
+    expect(next.layers[0]?.cells["0,1"]?.char).toBe("x");
+  });
+
   it("clips negative columns, keeping the visible remainder aligned", () => {
     const next = drawText(doc, layerId, 0, -2, "abcdef", STYLE);
     expect(toText(next)).toBe("cdef\n\n");

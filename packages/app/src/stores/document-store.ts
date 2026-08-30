@@ -34,6 +34,8 @@ export interface DocumentState {
   dirty: boolean;
   /** Bumped whenever `history.present` changes, including during a drag preview. */
   revision: number;
+  /** Bumped only when a different document is adopted. */
+  generation: number;
 
   present(): TuiDocument;
   canUndo(): boolean;
@@ -52,7 +54,14 @@ export interface DocumentState {
   redo(): void;
   /** Adopts a freshly opened or created document, discarding history. */
   load(doc: TuiDocument, handle: DocHandle | null): void;
-  markSaved(handle: DocHandle): void;
+  /**
+   * Acknowledges the exact revision written by a completed save.
+   *
+   * Within the same generation, the handle is adopted even when editing
+   * continued during Save As, but the document becomes clean only when the
+   * written revision is still current. A stale generation is ignored entirely.
+   */
+  markSaved(handle: DocHandle, revision: number, generation: number): boolean;
   /**
    * Marks the document as differing from any file.
    *
@@ -69,6 +78,7 @@ export function createDocumentStore(initial: TuiDocument) {
     handle: null,
     dirty: false,
     revision: 0,
+    generation: 0,
 
     present() {
       return get().history.present;
@@ -112,11 +122,24 @@ export function createDocumentStore(initial: TuiDocument) {
         handle,
         dirty: false,
         revision: get().revision + 1,
+        generation: get().generation + 1,
       });
     },
 
-    markSaved(handle) {
-      set({ handle, dirty: false });
+    markSaved(handle, revision, generation) {
+      const current = get();
+      // A save from a replaced document must not attach its old path or clean
+      // state to the new one. Revisions alone cannot distinguish replacement
+      // from ordinary edits made while a save was in flight.
+      if (current.generation !== generation) return false;
+      set({
+        handle,
+        // A write of revision N says nothing about edits made while it was in
+        // flight. `true`, rather than preserving the old flag, also covers an
+        // in-progress preview whose revision moved before its eventual commit.
+        dirty: current.revision !== revision,
+      });
+      return true;
     },
 
     markDirty() {

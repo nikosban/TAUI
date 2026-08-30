@@ -7,6 +7,7 @@ import {
   sequentialIdGen,
   type TuiDocument,
 } from "../src/model/document.js";
+import { RESOURCE_LIMITS } from "../src/model/resource-policy.js";
 import { drawText } from "../src/ops/draw.js";
 import {
   addLayer,
@@ -35,6 +36,16 @@ beforeEach(() => {
 });
 
 describe("addLayer", () => {
+  it("enforces the shared layer budget", () => {
+    const full: TuiDocument = {
+      ...doc,
+      layers: Array.from({ length: RESOURCE_LIMITS.layers }, (_, index) => ({
+        ...doc.layers[0]!,
+        id: `l${index}`,
+      })),
+    };
+    expect(() => addLayer(full)).toThrow(/layers cannot exceed/u);
+  });
   it("appends on top and activates the new layer", () => {
     const next = addLayer(doc, { idGen: sequentialIdGen("n"), name: "Overlay" });
     expect(names(next)).toEqual(["Layer 1", "Overlay"]);
@@ -119,6 +130,21 @@ describe("duplicateLayer", () => {
 
   it("is a no-op for an unknown layer", () => {
     expect(duplicateLayer(doc, "nope")).toBe(doc);
+  });
+
+  it("enforces layer, id, and name budgets", () => {
+    const full: TuiDocument = {
+      ...doc,
+      layers: Array.from({ length: RESOURCE_LIMITS.layers }, (_, index) => ({
+        ...doc.layers[0]!,
+        id: index === 0 ? base : `l${index}`,
+      })),
+    };
+    expect(() => duplicateLayer(full, base)).toThrow(/layers cannot exceed/u);
+    expect(() => duplicateLayer(doc, base, { idGen: () => "i".repeat(257) })).toThrow(
+      /id exceeds/u,
+    );
+    expect(() => duplicateLayer(doc, base, { name: "n".repeat(1025) })).toThrow(/name exceeds/u);
   });
 });
 

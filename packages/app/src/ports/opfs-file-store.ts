@@ -26,6 +26,7 @@ import {
   type DocHandle,
   type FileStore,
   FileStoreError,
+  MAX_DOCUMENT_BYTES,
   type OpenResult,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
@@ -92,10 +93,22 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
   const readText = async (
     directory: FileSystemDirectoryHandle,
     name: string,
+    maxBytes?: number,
   ): Promise<{ text: string; modifiedAt: number }> => {
     const fileHandle = await directory.getFileHandle(name);
     const file = await fileHandle.getFile();
+    if (maxBytes !== undefined && file.size > maxBytes) {
+      throw new FileStoreError("io", `${name} exceeds the ${maxBytes}-byte document size limit`);
+    }
     return { text: await file.text(), modifiedAt: file.lastModified };
+  };
+
+  const modifiedAt = async (
+    directory: FileSystemDirectoryHandle,
+    name: string,
+  ): Promise<number> => {
+    const fileHandle = await directory.getFileHandle(name);
+    return (await fileHandle.getFile()).lastModified;
   };
 
   const writeText = async (
@@ -159,7 +172,11 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async openHandle(handle) {
       try {
-        const { text, modifiedAt } = await readText(await dir(DOCS_DIR), handle.key);
+        const { text, modifiedAt } = await readText(
+          await dir(DOCS_DIR),
+          handle.key,
+          MAX_DOCUMENT_BYTES,
+        );
         return { handle, content: text, modifiedAt } satisfies OpenResult;
       } catch (error) {
         throw wrap(error, `cannot open ${handle.label}`);
@@ -245,7 +262,7 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
         // The source's mtime decides whether any of this is worth offering.
         let sourceModifiedAt: number | null = null;
         try {
-          sourceModifiedAt = (await readText(docsDir, key)).modifiedAt;
+          sourceModifiedAt = await modifiedAt(docsDir, key);
         } catch {
           // Never saved, or deleted since — every snapshot is then worth offering.
         }
@@ -254,7 +271,9 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
         for (const file of (await namesIn(directory)).sort()) {
           let parsed: { content?: unknown; savedAt?: unknown };
           try {
-            parsed = JSON.parse((await readText(directory, file)).text) as typeof parsed;
+            parsed = JSON.parse(
+              (await readText(directory, file, MAX_DOCUMENT_BYTES)).text,
+            ) as typeof parsed;
           } catch {
             // A torn write: skip this snapshot, keep the rest of the history.
             continue;

@@ -78,7 +78,7 @@ function getSegmenter(): Intl.Segmenter | undefined {
 }
 
 /** Splits text into graphemes, falling back to code points. */
-function graphemes(text: string): string[] {
+export function splitGraphemes(text: string): string[] {
   const seg = getSegmenter();
   if (seg === undefined) return Array.from(text);
   return Array.from(seg.segment(text), (s) => s.segment);
@@ -111,7 +111,17 @@ export function charWidth(char: string): 0 | 1 | 2 {
 
 /** True if `char` is exactly one grapheme occupying exactly one column. */
 export function isNarrowSingle(char: string): boolean {
-  return graphemeCount(char) === 1 && charWidth(char) === 1;
+  return graphemeCount(char) === 1 && charWidth(char) === 1 && !hasUnsafeTerminalCodePoint(char);
+}
+
+/**
+ * Controls and format characters are never cell data. In particular ESC, BEL,
+ * C1 CSI, and string terminators could become active terminal instructions when
+ * a document is exported as ANSI. Bidi/zero-width format controls are rejected
+ * too: they paint no trustworthy single-cell glyph and can disguise source.
+ */
+function hasUnsafeTerminalCodePoint(char: string): boolean {
+  return /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(char);
 }
 
 /**
@@ -134,6 +144,9 @@ export function assertNarrowChar(char: string): void {
   if (width === 0) {
     throw new InvalidCharError(char, "zero-width characters cannot occupy a cell");
   }
+  if (hasUnsafeTerminalCodePoint(char)) {
+    throw new InvalidCharError(char, "control and format characters cannot be stored in a cell");
+  }
 }
 
 /**
@@ -144,8 +157,9 @@ export function coerceNarrowChar(char: string): { char: string; warning?: string
   if (char.length === 0) return { char: " " };
   if (isNarrowSingle(char)) return { char };
   const width = charWidth(char);
-  const reason =
-    width === 2
+  const reason = hasUnsafeTerminalCodePoint(char)
+    ? "control or format character"
+    : width === 2
       ? "wide character"
       : width === 0
         ? "zero-width character"
@@ -160,13 +174,21 @@ export function coerceNarrowChar(char: string): { char: string; warning?: string
  * Splits text into per-cell characters, substituting anything unsupported.
  * Used by the text/ANSI importers so one wide character can't shift a whole row.
  */
-export function coerceToCells(text: string): { chars: string[]; warnings: string[] } {
+export function coerceToCells(
+  text: string,
+  maxWarnings = Number.POSITIVE_INFINITY,
+): { chars: string[]; warnings: string[] } {
   const chars: string[] = [];
   const warnings: string[] = [];
-  for (const part of graphemes(text)) {
+  let omittedWarnings = 0;
+  for (const part of splitGraphemes(text)) {
     const { char, warning } = coerceNarrowChar(part);
     chars.push(char);
-    if (warning !== undefined) warnings.push(warning);
+    if (warning !== undefined) {
+      if (warnings.length < maxWarnings) warnings.push(warning);
+      else omittedWarnings++;
+    }
   }
+  if (omittedWarnings > 0) warnings.push(`omitted ${omittedWarnings} character warning(s)`);
   return { chars, warnings };
 }

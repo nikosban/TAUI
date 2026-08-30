@@ -51,6 +51,12 @@ export interface GestureController {
   onKey(key: string, mods: Modifiers): void;
   cancel(): void;
   /**
+   * Settles every document-relative interaction immediately before another
+   * document is adopted. Typing is flushed rather than silently discarded;
+   * pointer previews are cancelled rather than committed.
+   */
+  settleDocumentReplacement(): void;
+  /**
    * Ends any open typing burst, turning it into one history entry.
    *
    * Must be called before undo, before save, and on tool change — otherwise the
@@ -303,6 +309,19 @@ export function createGestureController(deps: ControllerDeps): GestureController
       // than discarded; cancelling only dismisses the caret.
       flushTyping("blur");
       textSession = null;
+      deps.setCaret(null);
+    },
+
+    settleDocumentReplacement() {
+      dispatch({ t: "cancel" });
+      flushTyping("document-replacement");
+      // Be explicit even when the reducer had no effect (for example an idle text
+      // burst): no preview from the old document may survive the load boundary.
+      state = IDLE;
+      textSession = null;
+      hover = null;
+      deps.setScratch(null);
+      deps.setDragRect(null);
       deps.setCaret(null);
     },
 

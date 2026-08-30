@@ -8,9 +8,10 @@
  */
 
 import type { Cell } from "../model/cell.js";
-import { type Color, DEFAULT_COLOR, resolveColor } from "../model/color.js";
+import { type Color, type ColorRef, DEFAULT_COLOR } from "../model/color.js";
 import type { TuiDocument } from "../model/document.js";
 import { parseCellKey } from "../model/layer.js";
+import { assertDocumentResources } from "../model/resource-policy.js";
 
 /** A Cell whose colors are guaranteed raw — no palette references. */
 export interface ResolvedCell {
@@ -29,7 +30,9 @@ export type ResolvedGrid = readonly (readonly ResolvedCell[])[];
 /** A cell covered by no visible layer. Carries no style flags. */
 const EMPTY_CELL: ResolvedCell = { char: " ", fg: DEFAULT_COLOR, bg: DEFAULT_COLOR };
 
-function resolveCell(doc: TuiDocument, cell: Cell): ResolvedCell {
+function resolveCell(palette: ReadonlyMap<string, Color>, cell: Cell): ResolvedCell {
+  const resolve = (ref: ColorRef): Color =>
+    ref.kind === "palette" ? (palette.get(ref.id) ?? DEFAULT_COLOR) : ref;
   const resolved: {
     char: string;
     fg: Color;
@@ -40,8 +43,8 @@ function resolveCell(doc: TuiDocument, cell: Cell): ResolvedCell {
     inverse?: boolean;
   } = {
     char: cell.char,
-    fg: resolveColor(doc, cell.fg),
-    bg: resolveColor(doc, cell.bg),
+    fg: resolve(cell.fg),
+    bg: resolve(cell.bg),
   };
   // Copy style flags only when present, so absent stays absent.
   if (cell.bold !== undefined) resolved.bold = cell.bold;
@@ -64,9 +67,19 @@ export interface CompositeOptions {
  * covered by no layer become `{ char: " ", fg: default, bg: default }`.
  */
 export function composite(doc: TuiDocument, opts: CompositeOptions = {}): ResolvedGrid {
+  // Invalid sparse keys are inert at render time. File loading repairs them and
+  // serialization rejects them, but keeping render tolerant preserves the core
+  // API's robustness for hand-constructed and mid-operation documents.
+  assertDocumentResources(doc, { strictCoordinates: false });
   const grid: ResolvedCell[][] = Array.from({ length: doc.rows }, () =>
     Array.from({ length: doc.cols }, () => EMPTY_CELL),
   );
+  const palette = new Map<string, Color>();
+  for (const entry of doc.palette) {
+    // Preserve resolveColor's historical first-entry-wins behavior for a
+    // hand-constructed document containing duplicate ids.
+    if (!palette.has(entry.id)) palette.set(entry.id, entry.color);
+  }
 
   for (const layer of doc.layers) {
     if (!layer.visible) continue;
@@ -79,7 +92,7 @@ export function composite(doc: TuiDocument, opts: CompositeOptions = {}): Resolv
       const target = grid[pos.row];
       if (target === undefined) continue; // out-of-bounds key, e.g. hand-edited file
       if (pos.col < 0 || pos.col >= doc.cols) continue;
-      target[pos.col] = resolveCell(doc, cell);
+      target[pos.col] = resolveCell(palette, cell);
     }
   }
 

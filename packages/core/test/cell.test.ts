@@ -80,6 +80,12 @@ describe("isNarrowSingle", () => {
     expect(isNarrowSingle("")).toBe(false);
   });
 
+  it("rejects terminal controls and invisible format characters", () => {
+    for (const char of ["\x00", "\x07", "\x1b", "\x9b", "\u202e", "\u2066"]) {
+      expect(isNarrowSingle(char), JSON.stringify(char)).toBe(false);
+    }
+  });
+
   it("treats a combining sequence as one grapheme", () => {
     expect(isNarrowSingle("é")).toBe(true); // e + combining acute = 1 grapheme, 1 column
   });
@@ -99,6 +105,12 @@ describe("assertNarrowChar — the editing-side policy: hard reject", () => {
     expect(() => assertNarrowChar("")).toThrow(/empty string/u);
     expect(() => assertNarrowChar("ab")).toThrow(/expected exactly 1 grapheme, got 2/u);
     expect(() => assertNarrowChar("́")).toThrow(/zero-width/u);
+  });
+
+  it("rejects every control used to construct terminal escape sequences", () => {
+    for (const char of ["\x07", "\x1b", "\x9b", "\r", "\n", "\t"]) {
+      expect(() => assertNarrowChar(char), JSON.stringify(char)).toThrow(/control/u);
+    }
   });
 });
 
@@ -121,6 +133,14 @@ describe("coerceNarrowChar — the import-side policy: substitute and warn", () 
 
   it("maps the empty string to a space rather than U+FFFD", () => {
     expect(coerceNarrowChar("")).toEqual({ char: " " });
+  });
+
+  it("substitutes terminal controls instead of persisting active bytes", () => {
+    for (const char of ["\x07", "\x1b", "\x9b", "\u202e"]) {
+      const result = coerceNarrowChar(char);
+      expect(result.char, JSON.stringify(char)).toBe(REPLACEMENT_CHAR);
+      expect(result.warning).toMatch(/control or format/u);
+    }
   });
 });
 

@@ -11,6 +11,7 @@
  */
 
 import type { TuiDocument } from "../model/document.js";
+import { assertGridResources } from "../model/resource-policy.js";
 import { composite, type ResolvedGrid } from "./composite.js";
 
 export interface ToTextOptions {
@@ -24,6 +25,7 @@ export interface ToTextOptions {
 
 /** Renders a pre-composited grid. Always emits exactly one line per row. */
 export function gridToText(grid: ResolvedGrid, opts: ToTextOptions = {}): string {
+  assertGridResources(grid);
   const trim = opts.trimTrailingWhitespace ?? true;
   const eol = opts.lineEnding ?? "\n";
   const lines = grid.map((row) => {
