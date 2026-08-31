@@ -10,9 +10,10 @@ import {
   toText,
 } from "@tui-designer/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { classifyCoverage, coverageWarning } from "./canvas/coverage.js";
+import { classifyCoverage, coverageWarning, type ProbeMeasurement } from "./canvas/coverage.js";
 import { availableFonts, measureFont, measureProbes } from "./canvas/measure.js";
 import {
+  type CellMetrics,
   type CellPos,
   clampViewport,
   type FontSpec,
@@ -30,13 +31,17 @@ import { createReplacementPolicy } from "./files/replacement-policy.js";
 import { createGestureController, type PointerEventLike } from "./gestures/controller.js";
 import type { Modifiers, ToolId } from "./gestures/gesture.js";
 import { InspectorPanel } from "./inspect/InspectorPanel.js";
-import { parseLaunchConfig } from "./launch-config.js";
+import { type LaunchConfig, parseLaunchConfig } from "./launch-config.js";
 import { LayersPanel } from "./layers/LayersPanel.js";
 import { activeLayerNotice, cycleActiveId } from "./layers/panel-model.js";
 import { PalettePanel } from "./palette/PalettePanel.js";
 import { createFileActions } from "./ports/file-actions.js";
-import type { RecoveryInfo } from "./ports/file-store.js";
-import { type BrowserStorageStatus, createFileStore } from "./ports/index.js";
+import type { FileStore, RecoveryInfo } from "./ports/file-store.js";
+import {
+  type BrowserStorageStatus,
+  type CreateFileStoreOptions,
+  createFileStore,
+} from "./ports/index.js";
 import { matchShortcut, SHORTCUTS, shortcutHint } from "./shortcuts.js";
 import { createDocumentStore } from "./stores/document-store.js";
 import { usePrefsStore } from "./stores/prefs-store.js";
@@ -47,8 +52,78 @@ import { TEMPLATES, templateById } from "./templates.js";
  * URL parameters, so a headless browser can drive the app for visual checks:
  * `?template=form&font=Monaco&size=20&lh=1.2&zoom=2&grid=0&tool=box`.
  */
-const launchConfig = parseLaunchConfig(typeof window === "undefined" ? "" : window.location.search);
-const documentStore = createDocumentStore(templateById(launchConfig.template).build());
+interface AppBrowserDependencies {
+  readonly devicePixelRatio: () => number;
+  readonly observeViewport: (
+    element: HTMLElement,
+    onResize: (size: { readonly w: number; readonly h: number }) => void,
+    onResolutionChange: () => void,
+  ) => () => void;
+  readonly writeClipboard: (text: string) => Promise<void>;
+}
+
+export interface AppDependencies {
+  readonly launchConfig: LaunchConfig;
+  readonly documentStore: ReturnType<typeof createDocumentStore>;
+  readonly createFileStore: (options: CreateFileStoreOptions) => FileStore;
+  readonly confirm: (message: string) => boolean;
+  /** Epoch milliseconds for persistence and recovery labels. */
+  readonly now: () => number;
+  /** Monotonic milliseconds for gesture and transient animation bookkeeping. */
+  readonly monotonicNow: () => number;
+  readonly availableFonts: () => string[];
+  readonly measureFont: (font: FontSpec, dpr: number) => CellMetrics;
+  readonly measureProbes: (font: FontSpec) => ProbeMeasurement[];
+  readonly browser: AppBrowserDependencies;
+}
+
+export interface AppDependencyOverrides extends Partial<Omit<AppDependencies, "browser">> {
+  readonly browser?: Partial<AppBrowserDependencies>;
+}
+
+/**
+ * Builds the browser boundary once per App instance.
+ *
+ * Tests use the same path with deterministic overrides; production-only test
+ * hooks and global mutation are deliberately unnecessary.
+ */
+export function createAppDependencies(overrides: AppDependencyOverrides = {}): AppDependencies {
+  const launchConfig =
+    overrides.launchConfig ??
+    parseLaunchConfig(typeof window === "undefined" ? "" : window.location.search);
+  const browserDefaults: AppBrowserDependencies = {
+    devicePixelRatio: () => window.devicePixelRatio,
+    observeViewport: (element, onResize, onResolutionChange) => {
+      const observer = new ResizeObserver(([entry]) => {
+        if (entry !== undefined) {
+          onResize({ w: entry.contentRect.width, h: entry.contentRect.height });
+        }
+      });
+      observer.observe(element);
+      const media = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      media.addEventListener("change", onResolutionChange);
+      return () => {
+        observer.disconnect();
+        media.removeEventListener("change", onResolutionChange);
+      };
+    },
+    writeClipboard: (text) => navigator.clipboard.writeText(text),
+  };
+
+  return {
+    launchConfig,
+    documentStore:
+      overrides.documentStore ?? createDocumentStore(templateById(launchConfig.template).build()),
+    createFileStore: overrides.createFileStore ?? createFileStore,
+    confirm: overrides.confirm ?? ((message) => window.confirm(message)),
+    now: overrides.now ?? (() => Date.now()),
+    monotonicNow: overrides.monotonicNow ?? (() => performance.now()),
+    availableFonts: overrides.availableFonts ?? availableFonts,
+    measureFont: overrides.measureFont ?? measureFont,
+    measureProbes: overrides.measureProbes ?? measureProbes,
+    browser: { ...browserDefaults, ...overrides.browser },
+  };
+}
 
 /** Test hook. Visual assertions become string assertions. */
 declare global {
@@ -96,14 +171,20 @@ const storageUsage = (status: BrowserStorageStatus): string => {
   return ` · ${megabytes(status.usage)} / ${megabytes(status.quota)}`;
 };
 
-export function App(): React.JSX.Element {
+export interface AppProps {
+  readonly dependencies?: AppDependencies;
+}
+
+export function App({ dependencies }: AppProps = {}): React.JSX.Element {
+  const [runtime] = useState(() => dependencies ?? createAppDependencies());
+  const { documentStore, launchConfig } = runtime;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
   const prefs = usePrefsStore();
   const tools = useToolStore();
-  const [fonts] = useState<string[]>(() => availableFonts());
-  const [dpr, setDpr] = useState(() => window.devicePixelRatio);
+  const [fonts] = useState<string[]>(() => runtime.availableFonts());
+  const [dpr, setDpr] = useState(() => runtime.browser.devicePixelRatio());
   const [box, setBox] = useState({ w: 800, h: 500 });
   const [scroll, setScroll] = useState({ x: 0, y: 0 });
   /** Held Space enables pan-on-drag, the standard design-tool convention. */
@@ -154,12 +235,12 @@ export function App(): React.JSX.Element {
    * time. Calling through a wrapper always reaches the current one, which is both
    * more honest and what lets a test substitute it.
    */
-  const askConfirm = useCallback((message: string) => window.confirm(message), []);
+  const askConfirm = useCallback((message: string) => runtime.confirm(message), [runtime]);
 
   const doc = documentStore.getState().history.present;
   const size: GridSize = useMemo(() => ({ cols: doc.cols, rows: doc.rows }), [doc.cols, doc.rows]);
 
-  useEffect(() => documentStore.subscribe(bump), [bump]);
+  useEffect(() => documentStore.subscribe(bump), [bump, documentStore]);
 
   useEffect(() => {
     const store = usePrefsStore.getState();
@@ -169,7 +250,7 @@ export function App(): React.JSX.Element {
     store.setZoom(launchConfig.zoom);
     store.setShowGrid(launchConfig.showGrid);
     useToolStore.getState().setTool(launchConfig.tool);
-  }, []);
+  }, [launchConfig]);
 
   const font: FontSpec = useMemo(
     () => ({
@@ -180,7 +261,7 @@ export function App(): React.JSX.Element {
     [prefs.previewFont, prefs.fontSize, prefs.lineHeightFactor],
   );
 
-  const metrics = useMemo(() => measureFont(font, dpr), [font, dpr]);
+  const metrics = useMemo(() => runtime.measureFont(font, dpr), [runtime, font, dpr]);
 
   useEffect(() => {
     const probeFont: FontSpec = {
@@ -188,30 +269,21 @@ export function App(): React.JSX.Element {
       sizePx: prefs.fontSize,
       lineHeightFactor: prefs.requestedLineHeightFactor,
     };
-    const m = measureFont(probeFont, dpr);
+    const m = runtime.measureFont(probeFont, dpr);
     usePrefsStore
       .getState()
       .applyCoverage(
-        classifyCoverage(measureProbes(probeFont), m.cellW, m.cellH, probeFont.sizePx),
+        classifyCoverage(runtime.measureProbes(probeFont), m.cellW, m.cellH, probeFont.sizePx),
       );
-  }, [prefs.previewFont, prefs.fontSize, prefs.requestedLineHeightFactor, dpr]);
+  }, [runtime, prefs.previewFont, prefs.fontSize, prefs.requestedLineHeightFactor, dpr]);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (el === null) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry === undefined) return;
-      setBox({ w: entry.contentRect.width, h: entry.contentRect.height });
-    });
-    observer.observe(el);
-    const media = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    const onDpr = () => setDpr(window.devicePixelRatio);
-    media.addEventListener("change", onDpr);
-    return () => {
-      observer.disconnect();
-      media.removeEventListener("change", onDpr);
-    };
-  }, []);
+    return runtime.browser.observeViewport(el, setBox, () =>
+      setDpr(runtime.browser.devicePixelRatio()),
+    );
+  }, [runtime]);
 
   const viewport: Viewport = useMemo(
     () =>
@@ -246,9 +318,9 @@ export function App(): React.JSX.Element {
         },
         setDragRect,
         setCaret,
-        now: () => performance.now(),
+        now: runtime.monotonicNow,
       }),
-    [bump],
+    [bump, documentStore, runtime.monotonicNow],
   );
 
   /** Clears app bookkeeping and releases browser capture for a canceled session. */
@@ -302,13 +374,13 @@ export function App(): React.JSX.Element {
 
   const store = useMemo(
     () =>
-      createFileStore({
+      runtime.createFileStore({
         picker,
         ...(launchConfig.store === "auto" ? {} : { prefer: launchConfig.store }),
         onFallback: notify,
         onStorageStatus: setStorageStatus,
       }),
-    [notify, picker],
+    [runtime, launchConfig, notify, picker],
   );
 
   /**
@@ -343,7 +415,7 @@ export function App(): React.JSX.Element {
           if (opts?.dirty === true) documentStore.getState().markDirty();
         },
       }),
-    [askConfirm, controller, releasePointerSession],
+    [askConfirm, controller, documentStore, releasePointerSession],
   );
 
   const files = useMemo(
@@ -369,10 +441,10 @@ export function App(): React.JSX.Element {
         markSaved: (handle, revision, generation, modifiedAt) =>
           documentStore.getState().markSaved(handle, revision, generation, modifiedAt),
         confirmConflict: askConfirm,
-        now: () => Date.now(),
+        now: runtime.now,
         notify,
       }),
-    [store, controller, notify, replacement, askConfirm],
+    [store, controller, documentStore, notify, replacement, askConfirm, runtime.now],
   );
   const [fileStatus, setFileStatus] = useState(() => files.status());
 
@@ -407,11 +479,11 @@ export function App(): React.JSX.Element {
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, []);
+  }, [documentStore]);
 
   const getDoc = useCallback(
     () => scratchRef.current ?? documentStore.getState().history.present,
-    [],
+    [documentStore],
   );
 
   const overlays: Overlays = useMemo(
@@ -449,7 +521,7 @@ export function App(): React.JSX.Element {
     return () => {
       delete window.__tui;
     };
-  }, [getDoc]);
+  }, [documentStore, getDoc]);
 
   // Global shortcuts, routed through the one registry.
   useEffect(() => {
@@ -639,6 +711,7 @@ export function App(): React.JSX.Element {
     pickerRequest,
     recoveries,
     releasePointerSession,
+    documentStore,
   ]);
 
   /**
@@ -657,7 +730,7 @@ export function App(): React.JSX.Element {
     const current = documentStore.getState().present();
     const lost = cellsLostOnResize(current, cols, rows, anchor);
     if (lost > 0) {
-      const ok = window.confirm(
+      const ok = askConfirm(
         `Resizing to ${cols}×${rows} discards ${lost} painted cell${lost === 1 ? "" : "s"}. Continue?`,
       );
       if (!ok) return;
@@ -691,7 +764,8 @@ export function App(): React.JSX.Element {
   const warning =
     prefs.coverage === null ? null : coverageWarning(prefs.coverage, prefs.previewFont);
   const clamped = prefs.lineHeightFactor !== prefs.requestedLineHeightFactor;
-  const lockFlashing = tools.lockFlashAt !== null && performance.now() - tools.lockFlashAt < 600;
+  const lockFlashing =
+    tools.lockFlashAt !== null && runtime.monotonicNow() - tools.lockFlashAt < 600;
   const activeLayer = doc.layers.find((l) => l.id === doc.activeLayerId);
   const layerNotice = activeLayerNotice(doc);
 
@@ -882,8 +956,8 @@ export function App(): React.JSX.Element {
             hover={hover}
             theme={DARK_THEME}
             onCopy={(payload) => {
-              void navigator.clipboard
-                .writeText(payload)
+              void runtime.browser
+                .writeClipboard(payload)
                 .then(() => notify("Measurements copied as JSON."))
                 .catch(() => notify("Could not reach the clipboard."));
             }}
@@ -1022,7 +1096,7 @@ export function App(): React.JSX.Element {
       {recoveries !== null && recoveries.length > 0 ? (
         <RecoveryDialog
           snapshots={recoveries}
-          now={Date.now()}
+          now={runtime.now()}
           onRestore={(info) => {
             void files.restore(info).then((restored) => {
               if (restored) setRecoveries(null);

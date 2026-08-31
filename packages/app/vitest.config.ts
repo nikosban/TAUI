@@ -7,9 +7,9 @@ export default defineConfig({
   test: {
     // "node", not jsdom: every module under test here is deliberately DOM-free.
     // A test that reaches for `document` should fail rather than pass by accident.
-    // Use a per-file `// @vitest-environment jsdom` pragma if that ever changes.
+    // Component tests opt into jsdom per file, keeping every pure test honest.
     environment: "node",
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",
       // Every pure module. `renderer.ts`, `measure.ts`, and the React components
