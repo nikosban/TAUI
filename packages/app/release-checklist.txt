@@ -1,13 +1,161 @@
-ACCESSIBILITY AND KEYBOARD RELEASE BASELINE
+TAUI RELEASE CANDIDATE AND SABOTAGE CHECKLIST
 
-- Run the automated accessibility suite for the editor landmarks and every application dialog.
-- Tab through settings, tools, inspector controls, layer controls, notices, and status controls; the focus ring must remain visible.
-- Open every dialog from the keyboard and confirm initial focus, forward/reverse focus wrapping, Escape dismissal, inert background content, and focus restoration.
-- Confirm tool and file shortcuts, undo/redo, zoom, layer cycling, layer reordering with arrow keys, and layer/palette rename with F2.
-- Enable reduced motion at the operating-system level and confirm transient feedback does not animate continuously.
+PURPOSE
+
+This is the canonical template for checks that automation cannot yet prove. Copy
+the entire template into the Linear issue for every release candidate. Do not
+edit this file to record a particular release.
+
+A release candidate may be promoted only when:
+
+- every applicable check has an owner, evidence, and a PASS result;
+- every N/A result includes a reason;
+- every FAIL result links a newly created or existing Linear issue; and
+- the completed record is linked from the release candidate and release notes.
+
+Use one of PASS, FAIL, or N/A for Result. Expected evidence describes what must
+be captured; Evidence records the actual URL, attachment, CI run, screenshot,
+video, log, package checksum, or concise observation.
+
+RELEASE RECORD
+
+Release/version:
+Candidate identifier:
+Commit SHA:
+Date (UTC):
+Release owner:
+Test owner(s):
+Security reviewer:
+Platforms and versions tested:
+Automated CI run:
+Completed checklist link:
+Overall result (PASS/FAIL):
+Open failure issue(s):
+
+AUTOMATED GATE
+
+ID      Owner  Expected evidence                         Result  Evidence / Linear issue
+AUTO-1  _____  Required GitHub Actions run is green.     _____   _______________________
+AUTO-2  _____  Production dependency audit is green.    _____   _______________________
+AUTO-3  _____  Built artifact identifies this SHA.      _____   _______________________
+
+VISUAL FIDELITY AND INPUT
+
+ID      Owner  Expected evidence                         Result  Evidence / Linear issue
+UI-1    _____  Screenshot on each supported platform     _____   _______________________
+               shows crisp terminal glyphs, aligned
+               baselines, box joins, cursor, and grid.
+UI-2    _____  Screenshots at device pixel ratio 1 and   _____   _______________________
+               2 show no blur, clipping, or drift.
+UI-3    _____  Browser/app zoom at 80%, 100%, 125%,      _____   _______________________
+               and 200% preserves layout and hit areas.
+UI-4    _____  Video or observation confirms wheel,      _____   _______________________
+               trackpad, and scrollbar pan/scroll work.
+UI-5    _____  Pointer painting, selection, resize, and  _____   _______________________
+               canvas pan/zoom remain cell-accurate.
+UI-6    _____  Text, ANSI, SVG, and PNG output samples   _____   _______________________
+               match the canvas and preserve Unicode.
+
+KEYBOARD AND ACCESSIBILITY
+
+ID      Owner  Expected evidence                         Result  Evidence / Linear issue
+A11Y-1  _____  Automated accessibility suite is green.  _____   _______________________
+A11Y-2  _____  Keyboard pass covers settings, tools,     _____   _______________________
+               inspector, layers, notices, and status;
+               the focus ring remains visible.
+A11Y-3  _____  Dialog recording/observation confirms    _____   _______________________
+               initial focus, Tab/Shift+Tab wrapping,
+               Escape, inert background, and restored
+               focus for every application dialog.
+A11Y-4  _____  Keyboard pass covers file/tool shortcuts, _____   _______________________
+               undo/redo, zoom, layer cycling/reordering,
+               and F2 layer/palette rename.
+A11Y-5  _____  Reduced-motion OS setting prevents        _____   _______________________
+               continuous transient animation.
+
+FILES, RECOVERY, AND CONFLICTS
+
+ID      Owner  Expected evidence                         Result  Evidence / Linear issue
+FILE-1  _____  Download evidence covers all export       _____   _______________________
+               formats, safe filenames, and cancellation.
+FILE-2  _____  Open/save-as evidence covers success,     _____   _______________________
+               cancellation, invalid input, and errors.
+FILE-3  _____  Recovery evidence shows the newest valid  _____   _______________________
+               primary/backup/temp document is selected.
+FILE-4  _____  Overwrite-conflict evidence shows stale   _____   _______________________
+               writers cannot silently replace changes.
+FILE-5  _____  Storage-denied/full/unavailable evidence  _____   _______________________
+               shows a useful error and preserves data.
+
+NATIVE PACKAGE (WHEN AVAILABLE)
+
+ID        Owner  Expected evidence                       Result  Evidence / Linear issue
+NATIVE-1  _____  Signed packages install and launch on   _____   _______________________
+                 every supported OS and architecture.
+NATIVE-2  _____  Native open/save dialogs, downloads,    _____   _______________________
+                 persisted paths, and cancellation work.
+NATIVE-3  _____  Clean install, upgrade, and uninstall   _____   _______________________
+                 preserve or remove data as documented.
+NATIVE-4  _____  Package signature/notarization and      _____   _______________________
+                 artifact checksums are recorded.
+
+SECURITY REVIEW (REQUIRED WHEN THE CHANGE TOUCHES THE AREA)
+
+ID     Owner  Expected evidence                          Result  Evidence / Linear issue
+SEC-1  _____  Parser review lists untrusted inputs,      _____   _______________________
+              size/depth/time limits, malformed-input
+              behavior, and fuzz/regression coverage.
+SEC-2  _____  Adapter review covers permission denial,   _____   _______________________
+              path/filename handling, atomicity,
+              conflicts, and safe failure messages.
+SEC-3  _____  Tauri review shows least-privilege         _____   _______________________
+              capabilities, filesystem scopes, CSP,
+              dialogs, updater, and shell/process policy.
+SEC-4  _____  Dependency review records audits, new      _____   _______________________
+              packages, lockfile changes, provenance,
+              and any accepted advisory with an owner.
+SEC-5  _____  Output review confirms user-controlled     _____   _______________________
+              content cannot inject markup, terminal
+              controls, paths, commands, or secrets.
+
+REGRESSION-TEST SABOTAGE
+
+Every bug-fix pull request must include the failing-test evidence requested by
+.github/pull_request_template.md. Before applying the fix, or by temporarily
+reverting/altering the fix locally, demonstrate that the regression test fails
+for the intended reason. Record the exact command and a concise failure excerpt;
+a screenshot or CI link may supplement, but not replace, the command. Restore
+the fix and confirm the same test passes. Never commit the sabotaged code.
+
+ID     Owner  Expected evidence                          Result  Evidence / Linear issue
+SAB-1  _____  Bug-fix PRs list the regression test and   _____   _______________________
+              exact sabotage used to make it fail.
+SAB-2  _____  Failure excerpt matches the original bug,  _____   _______________________
+              rather than an unrelated setup failure.
+SAB-3  _____  The focused test passes after restoration  _____   _______________________
+              and the sabotage is absent from the diff.
+
+FAILURE HANDLING AND SIGN-OFF
+
+For each FAIL, create or link a Linear issue before completing this record. The
+issue must include reproduction steps and evidence, identify the affected
+release candidate, and state whether it blocks release. Do not convert a FAIL to
+N/A merely to promote a candidate.
+
+Blocking Linear issues:
+Accepted non-blocking Linear issues and rationale:
+Release owner sign-off (name/date/result):
+Test owner sign-off (name/date/result):
+Security reviewer sign-off, when applicable (name/date/result):
 
 CANVAS ALTERNATIVE AND KNOWN LIMITATIONS
 
-The canvas exposes document dimensions, active layer, active tool, and exact selected-region coordinates and size to assistive technology. The Inspector also exposes stable measurements and can copy them as JSON.
+The canvas exposes document dimensions, active layer, active tool, and exact
+selected-region coordinates and size to assistive technology. The Inspector also
+exposes stable measurements and can copy them as JSON.
 
-Direct cell painting, pointer-position inspection, marquee placement, and canvas pan/zoom still require a visual pointer workflow. There is not yet a cell-by-cell keyboard grid or fully navigable accessibility-tree representation of the composed terminal image. Keep this limitation in release notes until a non-visual canvas interaction model is implemented.
+Direct cell painting, pointer-position inspection, marquee placement, and canvas
+pan/zoom still require a visual pointer workflow. There is not yet a cell-by-cell
+keyboard grid or fully navigable accessibility-tree representation of the
+composed terminal image. Keep this limitation in release notes until a non-visual
+canvas interaction model is implemented.

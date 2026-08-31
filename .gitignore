@@ -28,6 +28,7 @@ coverage/
 PRD_SPEC/
 *.md
 *.mdx
+!.github/pull_request_template.md
 
 # Tauri (created at G4)
 packages/app/src-tauri/target/
