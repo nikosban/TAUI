@@ -21,7 +21,7 @@ import {
   isValidColor,
 } from "../model/color.js";
 import { CURRENT_VERSION, type TuiDocument } from "../model/document.js";
-import { type Layer, parseCellKey } from "../model/layer.js";
+import { cellKey, type Layer, parseCellKey } from "../model/layer.js";
 import {
   assertBoundedString,
   assertDocumentDimensions,
@@ -212,7 +212,11 @@ function validateLayer(
   const validated: Record<string, Cell> = Object.create(null) as Record<string, Cell>;
   for (const [key, value] of Object.entries(cells)) {
     const position = parseCellKey(key);
-    if (position === null) {
+    // JSON object keys can spell the same numeric coordinate in multiple ways
+    // (`"0,0"`, `"00,0"`, `"0e0,0"`). Keeping aliases would make one cell
+    // unreachable through cellKey() and could make render order decide which
+    // value wins, so only the format's canonical spelling is accepted.
+    if (position === null || key !== cellKey(position.row, position.col)) {
       warnings.add(`${where}: dropped malformed cell key ${JSON.stringify(key.slice(0, 128))}`);
       continue;
     }
@@ -277,7 +281,7 @@ function validateDocument(raw: Record<string, unknown>, warnings: BoundedWarning
         `palette exceeds the limit of ${RESOURCE_LIMITS.paletteEntries} entries`,
       );
     }
-    return palette.map((entry, i) => {
+    const entries = palette.map((entry, i) => {
       if (!isRecord(entry)) throw new TuiParseError(`palette[${i}] must be an object`);
       const { id, name, color } = entry;
       if (typeof id !== "string" || id.length === 0) {
@@ -292,6 +296,15 @@ function validateDocument(raw: Record<string, unknown>, warnings: BoundedWarning
       }
       return { id, name, color: resolved };
     });
+    const paletteIds = new Set(entries.map((entry) => entry.id));
+    if (paletteIds.size !== entries.length) {
+      throw new TuiParseError("palette ids must be unique");
+    }
+    const paletteNames = new Set(entries.map((entry) => entry.name));
+    if (paletteNames.size !== entries.length) {
+      throw new TuiParseError("palette names must be unique");
+    }
+    return entries;
   })();
 
   // activeLayerId integrity: repair rather than reject, so a hand-edited file opens.

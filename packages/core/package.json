@@ -48,6 +48,6 @@
     "vitest": "^3.2.0"
   },
   "bin": {
-    "tui-designer": "./dist/bin/cli.js"
+    "tui-designer": "./dist/bin/main.js"
   }
 }

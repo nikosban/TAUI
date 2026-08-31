@@ -47,6 +47,13 @@ describe("document structure", () => {
     }
   });
 
+  it("rejects finite metrics whose derived geometry overflows", () => {
+    expect(() => toSvg(doc(2, 2), { cellW: Number.MAX_VALUE })).toThrow(/remain finite/u);
+    expect(() =>
+      toSvg(doc(2, 2), { cellH: Number.MAX_VALUE / 2, baseline: Number.MAX_VALUE }),
+    ).toThrow(/remain finite/u);
+  });
+
   it("declares the SVG namespace and a monospace stack", () => {
     const svg = toSvg(doc(2, 1));
     expect(svg).toContain(`xmlns="http://www.w3.org/2000/svg"`);

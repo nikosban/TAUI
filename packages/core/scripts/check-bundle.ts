@@ -11,18 +11,19 @@
  * 2. **Executing the bundle touches no Node global**, with `require` and
  *    `process` shadowed by throwing proxies. This is the only check that catches
  *    a *dynamic* `await import("node:fs")`, invisible to static analysis.
- * 3. **The CLI is unreachable** from `index.ts` — no metafile input matches
- *    `bin/cli`. The CLI legitimately imports `node:fs`, so without this check the
- *    first one would have to tolerate Node builtins everywhere.
+ * 3. **The CLI is unreachable** from `index.ts` — no metafile input lives under
+ *    `bin/`. The executable shell legitimately imports `node:fs`, so without this
+ *    check the first one would have to tolerate Node builtins everywhere.
  *
  * Deliberately reads `dist/` rather than re-bundling: this tests the artifact
  * that actually ships, under the exact settings it ships with. Run `pnpm build`
  * first — the script says so if the metafile is missing.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** The shape of the metafile fields this script uses. */
 interface Metafile {
@@ -47,7 +48,7 @@ const inputs = Object.keys(meta.inputs);
 // ---- Check 3: the CLI is unreachable from the library entry ----
 // Reported first: a reachable CLI would also trip check 1, and this is the more
 // actionable message.
-const cliInputs = inputs.filter((input) => /bin[/\\]cli/u.test(input));
+const cliInputs = inputs.filter((input) => /bin[/\\]/u.test(input));
 if (cliInputs.length > 0) {
   failures.push(
     `index.ts reaches the CLI (${cliInputs.join(", ")}). The CLI may import Node ` +
@@ -86,6 +87,32 @@ try {
   failures.push(`executing dist/index.js failed: ${(error as Error).message}`);
 } finally {
   rmSync(scratch, { force: true });
+}
+
+// ---- Check 4: the packaged CLI starts through its normal symlink ----
+// Package managers expose `bin` entries through a shim or symlink whose filename
+// is not `cli.js`. This caught a real regression where the entry guard searched
+// argv for the substring "cli" and silently did nothing as `tui-designer`.
+const cliEntry = resolve("dist/bin/main.js");
+const cliLink = join(tmpdir(), `tui-designer-${process.pid}`);
+try {
+  symlinkSync(cliEntry, cliLink);
+  for (const invoked of [cliEntry, cliLink]) {
+    const result = spawnSync(process.execPath, [invoked, "render", "--help"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    if (result.status !== 0 || !result.stdout.includes("tui-designer — TUI Designer")) {
+      failures.push(
+        `CLI failed through ${invoked === cliEntry ? "direct entry" : "package-style symlink"}: ` +
+          `status ${String(result.status)}, stderr ${JSON.stringify(result.stderr)}`,
+      );
+    }
+  }
+} catch (error) {
+  failures.push(`checking the packaged CLI failed: ${(error as Error).message}`);
+} finally {
+  rmSync(cliLink, { force: true });
 }
 
 if (failures.length > 0) {

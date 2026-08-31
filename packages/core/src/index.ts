@@ -1,8 +1,9 @@
 /**
  * Public API surface of `@tui-designer/core`.
  *
- * Everything not exported here is internal. `bin/cli.ts` imports solely from this
- * module, which doubles as a completeness check on the public surface.
+ * Everything not exported here is internal. Both CLI modules import engine
+ * behavior solely from this module, which doubles as a completeness check on the
+ * public surface.
  *
  * Deliberately NOT exported: `model/draft.ts` (the mutable draft must never
  * escape an op) and `model/width-table.ts` (generated data).

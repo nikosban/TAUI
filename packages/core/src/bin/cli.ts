@@ -2,25 +2,20 @@
  * The CLI: a thin wrapper so `.tui` documents can live in a repo and render in
  * CI or a docs pipeline.
  *
- * **This is the only file in the package permitted to touch Node APIs**, and it
- * imports *solely* from `index.ts`. That second rule is load-bearing twice over:
- * it doubles as a public-API completeness check (if the CLI needs something not
- * exported, the export map is wrong), and `scripts/check-bundle.ts` asserts no
- * input reachable from `index.ts` matches `bin/cli`, so the library entry can
- * never drag `node:fs` into a browser bundle.
+ * This module is the importable command body. The tiny executable shell lives in
+ * `bin/main.ts`, so importing `run` in a test can never inspect argv or touch the
+ * filesystem. Both import solely from `index.ts`, which doubles as a public-API
+ * completeness check.
  *
  * PNG export is deliberately absent. Rasterising needs font rendering, which is
  * three lines in the GUI (canvas → blob) and a dependency tarpit headlessly.
  */
 
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import {
   deserialize,
   parseAnsi,
   parseText,
   RESOURCE_LIMITS,
-  ResourceLimitError,
   serialize,
   type TuiDocument,
   toAnsi,
@@ -185,32 +180,3 @@ export function run(argv: readonly string[], io: Io): number {
     return 1;
   }
 }
-
-/** Works both as `node dist/bin/cli.js` and through the package's `tui-designer` symlink. */
-function isMainModule(): boolean {
-  const invoked = process.argv[1];
-  if (invoked === undefined) return false;
-  try {
-    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-/* c8 ignore start -- the process shell; `run` above holds all the logic. */
-if (isMainModule()) {
-  const code = run(process.argv.slice(2), {
-    readFile: (path, maxBytes) => {
-      const bytes = statSync(path).size;
-      if (bytes > maxBytes) {
-        throw new ResourceLimitError(`input file is ${bytes} bytes; limit is ${maxBytes}`);
-      }
-      return readFileSync(path, "utf8");
-    },
-    writeFile: (path, data) => writeFileSync(path, data, "utf8"),
-    stdout: (data) => process.stdout.write(data),
-    stderr: (data) => process.stderr.write(data),
-  });
-  process.exitCode = code;
-}
-/* c8 ignore stop */

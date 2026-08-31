@@ -2,11 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "types": []
   },
   // `scripts/box-names.ts` is pure and is imported by the test suite, so it lives
   // here. The Node-touching scripts are checked by tsconfig.scripts.json, which
   // keeps @types/node out of scope for src/ — a stray `process.env` in the engine
   // must not typecheck.
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/box-names.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/box-names.ts"],
+  "exclude": ["src/bin/main.ts"]
 }

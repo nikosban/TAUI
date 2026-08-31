@@ -172,6 +172,26 @@ describe("cursor positioning", () => {
     expect(Object.keys(doc.layers[0]?.cells ?? {})).toHaveLength(4);
   });
 
+  it("implements EL 0, 1, and 2 without moving the cursor", () => {
+    const blue = { kind: "ansi16", index: 4 } as const;
+
+    const el0 = parse("abc\x1b[1;3H\x1b[44m\x1b[0KX", { cols: 5 }).doc;
+    expect(el0.layers[0]?.cells["0,1"]?.char).toBe("b");
+    expect(el0.layers[0]?.cells["0,2"]?.char).toBe("X");
+    expect(el0.layers[0]?.cells["0,4"]?.bg).toEqual(blue);
+
+    const el1 = parse("abcde\x1b[1;3H\x1b[44m\x1b[1KX", { cols: 5 }).doc;
+    expect(el1.layers[0]?.cells["0,0"]?.bg).toEqual(blue);
+    expect(el1.layers[0]?.cells["0,2"]?.char).toBe("X");
+    expect(el1.layers[0]?.cells["0,3"]?.char).toBe("d");
+
+    const el2 = parse("abcde\x1b[1;3H\x1b[44m\x1b[2KX", { cols: 5 }).doc;
+    expect(el2.layers[0]?.cells["0,0"]?.bg).toEqual(blue);
+    expect(el2.layers[0]?.cells["0,2"]?.char).toBe("X");
+    expect(el2.layers[0]?.cells["0,4"]?.char).toBe(" ");
+    expect(el2.layers[0]?.cells["0,4"]?.bg).toEqual(blue);
+  });
+
   it("clips hostile cursor coordinates without creating an enormous document", () => {
     const { doc, warnings } = parse("\x1b[999999999999;999999999999HX");
     expect(doc.cols).toBe(1);

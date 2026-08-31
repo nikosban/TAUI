@@ -221,10 +221,17 @@ function scan(input: string, width: number | undefined, warnings: BoundedWarning
         row = Math.max(0, Math.min(RESOURCE_LIMITS.documentRows, (consumed.params[0] ?? 1) - 1));
         col = Math.max(0, Math.min(RESOURCE_LIMITS.documentCols, (consumed.params[1] ?? 1) - 1));
       } else if (consumed.kind === "el" && width !== undefined) {
-        // Erase-to-EOL paints the current background across the rest of the row.
-        // This is how full-screen apps draw a status bar, so skipping it would
-        // silently drop the most visually obvious part of a capture.
-        for (let c = col; c < width; c++) put(" ", { row, col: c }, pen);
+        // ECMA-48 EL supports three directions. The cursor does not move and the
+        // erased cells retain the current rendition, which is how full-screen
+        // applications paint coloured bars.
+        const last = width - 1;
+        const [from, through] =
+          consumed.mode === 1
+            ? [0, Math.min(col, last)]
+            : consumed.mode === 2
+              ? [0, last]
+              : [Math.min(col, width), last];
+        for (let c = from; c <= through; c++) put(" ", { row, col: c }, pen);
       }
       continue;
     }
@@ -349,7 +356,7 @@ export function parseAnsi(input: string, opts: ParseAnsiOptions = {}): ImportRes
 type Escape =
   | { readonly kind: "sgr"; readonly params: number[]; readonly length: number }
   | { readonly kind: "cup"; readonly params: number[]; readonly length: number }
-  | { readonly kind: "el"; readonly length: number }
+  | { readonly kind: "el"; readonly mode: 0 | 1 | 2; readonly length: number }
   | { readonly kind: "skip"; readonly length: number };
 
 /**
@@ -396,7 +403,11 @@ function readEscape(input: string, start: number): Escape | null {
         if (c === "H" || c === "f") {
           return { kind: "cup", params: digits === "" ? [] : params, length };
         }
-        if (c === "K") return { kind: "el", length };
+        if (c === "K") {
+          const mode = digits === "" ? 0 : params[0];
+          if (mode === 0 || mode === 1 || mode === 2) return { kind: "el", mode, length };
+          return { kind: "skip", length };
+        }
         return { kind: "skip", length };
       }
       // Any other byte (an intermediate like " " or "!") — keep scanning.

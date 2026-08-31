@@ -57,7 +57,11 @@ function storedCoordinate(key: string): { row: number; col: number } | null {
   if (comma <= 0) return null;
   const row = Number(key.slice(0, comma));
   const col = Number(key.slice(comma + 1));
-  return Number.isInteger(row) && Number.isInteger(col) ? { row, col } : null;
+  if (!Number.isInteger(row) || !Number.isInteger(col)) return null;
+  // Reject aliases such as `00,0` and `0e0,0`: all editor paths generate the
+  // canonical spelling, and accepting aliases makes sparse-cell identity
+  // ambiguous at serialization and composition boundaries.
+  return key === `${row},${col}` ? { row, col } : null;
 }
 
 export function assertBoundedString(value: string, label: string, max: number): void {
@@ -112,9 +116,19 @@ export function assertDocumentResources(
   }
 
   assertBoundedString(doc.activeLayerId, "activeLayerId", RESOURCE_LIMITS.idChars);
+  const paletteIds = new Set<string>();
+  const paletteNames = new Set<string>();
   for (const [index, entry] of doc.palette.entries()) {
     assertBoundedString(entry.id, `palette[${index}].id`, RESOURCE_LIMITS.idChars);
     assertBoundedString(entry.name, `palette[${index}].name`, RESOURCE_LIMITS.nameChars);
+    if (paletteIds.has(entry.id)) {
+      throw new ResourceLimitError(`palette id ${JSON.stringify(entry.id)} is not unique`);
+    }
+    if (paletteNames.has(entry.name)) {
+      throw new ResourceLimitError(`palette name ${JSON.stringify(entry.name)} is not unique`);
+    }
+    paletteIds.add(entry.id);
+    paletteNames.add(entry.name);
   }
 
   let storedCells = 0;

@@ -65,12 +65,18 @@ describe("canonical", () => {
     expect(() => canonical({ a: () => 1 })).toThrow(TuiParseError);
   });
 
-  it("handles __proto__ as inert data instead of mutating the output prototype", () => {
-    const input = JSON.parse('{"__proto__":{"polluted":true},"safe":1}');
+  it("handles prototype-related keys as inert data", () => {
+    const input = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":"data","prototype":{"safe":true}}',
+    );
     const output = canonical(input) as Record<string, unknown>;
     expect(Object.getPrototypeOf(output)).toBeNull();
     expect(Object.hasOwn(output, "__proto__")).toBe(true);
-    expect(JSON.stringify(output)).toBe('{"__proto__":{"polluted":true},"safe":1}');
+    expect(Object.hasOwn(output, "constructor")).toBe(true);
+    expect(Object.hasOwn(output, "prototype")).toBe(true);
+    expect(JSON.stringify(output)).toBe(
+      '{"__proto__":{"polluted":true},"constructor":"data","prototype":{"safe":true}}',
+    );
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });
@@ -176,6 +182,18 @@ describe("deserialize", () => {
     expect(() => deserialize(JSON.stringify(doc))).toThrow(/layer ids must be unique/u);
   });
 
+  it("rejects duplicate palette ids and names", () => {
+    const duplicateId = JSON.parse(serialize(richDocument()));
+    duplicateId.palette[1].id = duplicateId.palette[0].id;
+    expect(() => deserialize(JSON.stringify(duplicateId))).toThrow(/palette ids must be unique/u);
+
+    const duplicateName = JSON.parse(serialize(richDocument()));
+    duplicateName.palette[1].name = duplicateName.palette[0].name;
+    expect(() => deserialize(JSON.stringify(duplicateName))).toThrow(
+      /palette names must be unique/u,
+    );
+  });
+
   it("repairs an activeLayerId that points at nothing, and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.activeLayerId = "ghost";
@@ -193,6 +211,14 @@ describe("deserialize", () => {
     };
     const result = deserialize(JSON.stringify(doc));
     expect(result.warnings).toEqual([expect.stringMatching(/malformed cell key/u)]);
+  });
+
+  it("drops non-canonical aliases of cell coordinates", () => {
+    const doc = JSON.parse(serialize(richDocument()));
+    doc.layers[0].cells["00,0"] = doc.layers[0].cells["0,0"];
+    const result = deserialize(JSON.stringify(doc));
+    expect(result.warnings).toEqual([expect.stringMatching(/malformed cell key/u)]);
+    expect(result.doc.layers[0]?.cells["00,0"]).toBeUndefined();
   });
 
   it("bounds repair warnings from hostile sparse cell maps", () => {
@@ -346,6 +372,15 @@ describe("deserialize", () => {
     };
     expect(() => serialize(unsafe)).toThrow(/control/u);
     expect(() => serialize(createDocument(501, 500))).toThrow(ResourceLimitError);
+
+    const aliased = richDocument();
+    const first = aliased.layers[0]!;
+    expect(() =>
+      serialize({
+        ...aliased,
+        layers: [{ ...first, cells: { ...first.cells, "00,0": first.cells["0,0"]! } }],
+      }),
+    ).toThrow(/invalid cell coordinate/u);
   });
 });
 

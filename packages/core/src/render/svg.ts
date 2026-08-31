@@ -170,6 +170,10 @@ export function gridToSvg(grid: ResolvedGrid, opts: ToSvgOptions = {}): string {
   const cols = grid[0]?.length ?? 0;
   const width = cols * cellW;
   const height = rows * cellH;
+  const lastBaseline = (rows - 1) * cellH + baseline;
+  if (![width, height, lastBaseline].every(Number.isFinite)) {
+    throw new ResourceLimitError("SVG geometry must remain finite after applying cell metrics");
+  }
 
   const parts: string[] = [];
   parts.push(
