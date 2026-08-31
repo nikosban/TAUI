@@ -435,11 +435,15 @@ export function App(): React.JSX.Element {
   });
 
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     window.__tui = {
       toText: () => toText(documentStore.getState().history.present),
       present: () => documentStore.getState().history.present,
       revision: () => documentStore.getState().revision,
       renderedText: () => toText(getDoc()),
+    };
+    return () => {
+      delete window.__tui;
     };
   }, [getDoc]);
 
