@@ -387,6 +387,37 @@ describe("save", () => {
     expect(state.dirty).toBe(false);
   });
 
+  it("upgrades a queued Save to Save As without opening two concurrent writes", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    state = { ...state, handle };
+    edit("queued work");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let saveAsCalls = 0;
+    const delayed: FileStore = {
+      ...store,
+      async save(target, content) {
+        started.resolve();
+        await release.promise;
+        return store.save(target, content);
+      },
+      async saveAs() {
+        saveAsCalls++;
+        return { handle: { key: "b.tui", label: "b.tui", display: "b.tui" }, modifiedAt: clock };
+      },
+    };
+    const racing = build({ store: delayed });
+    const first = racing.save();
+    await started.promise;
+    const queuedSave = racing.save();
+    const queuedSaveAs = racing.saveAs();
+    release.resolve();
+
+    expect(await Promise.all([first, queuedSave, queuedSaveAs])).toEqual([true, true, true]);
+    expect(saveAsCalls).toBe(1);
+    expect(state.handle?.key).toBe("b.tui");
+  });
+
   it("does not apply a queued save request to a replacement document", async () => {
     const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
     state = { ...state, handle };
@@ -797,6 +828,26 @@ describe("autosave", () => {
 
     await actions.save();
     expect(Object.keys(store.recoverySnapshot())).not.toContain(untitled);
+  });
+
+  it("keeps untitled recovery when its post-save cleanup fails", async () => {
+    const broken: FileStore = {
+      ...store,
+      async clearRecovery(key) {
+        if (key.startsWith("untitled-")) {
+          throw new FileStoreError("io", "cleanup unavailable");
+        }
+        return store.clearRecovery(key);
+      },
+    };
+    actions = build({ store: broken });
+    edit("work");
+    await actions.tick();
+    const untitled = actions.autosaveKey();
+
+    expect(await actions.save()).toBe(true);
+    expect(Object.keys(store.recoverySnapshot())).toContain(untitled);
+    expect(notices.join()).toContain("cleanup unavailable");
   });
 
   it("skips while a gesture or typing burst is open", async () => {

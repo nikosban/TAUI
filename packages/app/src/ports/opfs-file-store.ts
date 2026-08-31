@@ -223,14 +223,18 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
   const pruneStoredRecoveries = async (): Promise<void> => {
     const parent = await existingDir(RECOVERY_DIR);
+    /* c8 ignore start -- called only after writeRecovery creates this directory. */
     if (parent === null) return;
+    /* c8 ignore stop */
     const found = (await storedRecoveries(parent)).sort(
       (a, b) => a.modifiedAt - b.modifiedAt || a.name.localeCompare(b.name),
     );
     let bytes = found.reduce((sum, item) => sum + item.size, 0);
     while (found.length > RECOVERY_TOTAL_LIMIT || bytes > RECOVERY_TOTAL_BYTES) {
       const oldest = found.shift();
+      /* c8 ignore start -- the loop condition proves `found` is non-empty. */
       if (oldest === undefined) break;
+      /* c8 ignore stop */
       await oldest.directory.removeEntry(oldest.name);
       bytes -= oldest.size;
     }

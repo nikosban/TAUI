@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   verify:
+    name: Required quality gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -21,8 +22,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
-        with:
-          version: 11.19.0
 
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -52,22 +51,39 @@ jobs:
 
           echo "::warning::npm registry keys endpoint unavailable; signature verification deferred"
 
-      - name: Audit dependencies
-        run: pnpm audit --audit-level=low --ignore-registry-errors
+      # Shipped dependencies are held to every published advisory; build/test
+      # tooling fails the gate at high severity because it is never distributed.
+      - name: Audit production dependencies (low+)
+        run: pnpm audit:prod
+
+      - name: Audit development dependencies (high+)
+        run: pnpm audit:dev
 
       - name: Build
         run: pnpm build
 
-      - name: Test
+      - name: Run unit and component tests
         run: pnpm test
 
       - name: Install Playwright Chromium
         run: pnpm --filter @tui-designer/app exec playwright install chromium --with-deps --only-shell
 
       - name: Run browser smoke tests
+        id: browser-tests
         run: pnpm test:e2e
 
-      - name: Enforce core coverage
+      - name: Upload browser failure artifacts
+        if: failure() && steps.browser-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-failure-${{ github.run_id }}
+          path: |
+            packages/app/playwright-report/
+            packages/app/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Enforce core and app coverage
         run: pnpm test:coverage
 
       - name: Typecheck
@@ -78,10 +94,21 @@ jobs:
 
       - name: Check architecture and unused code
         run: |
-          pnpm --filter @tui-designer/app check:arch
-          pnpm --filter @tui-designer/app check:unused
-          pnpm --filter @tui-designer/core check:arch
-          pnpm --filter @tui-designer/core check:unused
+          pnpm check:arch
+          pnpm check:unused
+
+      - name: Check generated files are current
+        id: generated-files
+        run: pnpm check:generated
+
+      - name: Upload regenerated file on failure
+        if: failure() && steps.generated-files.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stale-generated-file-${{ github.run_id }}
+          path: packages/core/src/ops/box-table.ts
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Validate published core package
         run: |

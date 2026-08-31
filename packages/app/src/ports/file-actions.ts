@@ -132,6 +132,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   });
 
   const setOperation = (next: FileOperationKind): void => {
+    /* c8 ignore next -- callers transition only at guarded operation boundaries. */
     if (operation === next) return;
     operation = next;
     const status = operationStatus();
@@ -203,6 +204,8 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     if (untitledRecoveryKey !== null && writtenRevisionIsCurrent()) {
       try {
         await deps.store.clearRecovery(untitledRecoveryKey);
+        // `untitledRecoveryKey` is derived from this exact object and generation.
+        /* c8 ignore next -- retained as a stale-completion guard. */
         if (untitled?.key === untitledRecoveryKey) untitled = null;
       } catch (error) {
         deps.notify(`Saved, but could not clear recovery data: ${errorMessage(error)}`);
@@ -270,6 +273,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       setOperation("idle");
       // A request can be queued by a completion handler after the loop observes
       // null but before this task yields back to the browser.
+      /* c8 ignore next -- defensive against future synchronous settlement hooks. */
       if (saveQueue.length > 0) void drainSaves();
     }
   };

@@ -8,13 +8,14 @@
  * sequencing and pruning bugs, which no call-assertion would.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FileStoreError,
   isCancelled,
   MAX_DOCUMENT_BYTES,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
+  RECOVERY_STARTUP_BYTES,
   RECOVERY_TOTAL_LIMIT,
 } from "../src/ports/file-store.js";
 import { createOpfsFileStore, type OpfsFileStore } from "../src/ports/opfs-file-store.js";
@@ -36,6 +37,8 @@ class FakeDir {
   readonly files = new Map<string, FakeFile>();
   readonly dirs = new Map<string, FakeDir>();
   failNextWrite = false;
+  failNextAbort = false;
+  getFileFailure: Error | null = null;
   aborts = 0;
 
   constructor(private readonly clock: () => number) {}
@@ -50,6 +53,11 @@ class FakeDir {
   }
 
   async getFileHandle(name: string, opts?: { create?: boolean }) {
+    if (this.getFileFailure !== null) {
+      const failure = this.getFileFailure;
+      this.getFileFailure = null;
+      throw failure;
+    }
     if (!this.files.has(name)) {
       if (opts?.create !== true) throw new NotFound(name);
       this.files.set(name, { content: "", lastModified: this.clock() });
@@ -81,6 +89,10 @@ class FakeDir {
           },
           abort: async () => {
             dir.aborts++;
+            if (dir.failNextAbort) {
+              dir.failNextAbort = false;
+              throw new Error("abort failed");
+            }
           },
         };
       },
@@ -145,6 +157,8 @@ beforeEach(() => {
   root = new FakeDir(now);
   store = makeStore();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("capabilities", () => {
   it("declares itself persistent, with mtimes and no native dialogs", () => {
@@ -217,6 +231,41 @@ describe("save and open", () => {
     expect((await store.openHandle(handle("a.tui"))).content).toBe("original");
   });
 
+  it("preserves the write failure when abort cleanup also fails", async () => {
+    await store.save(handle("a.tui"), "original");
+    const docs = root.dirs.get("docs") as FakeDir;
+    docs.failNextWrite = true;
+    docs.failNextAbort = true;
+    await expect(store.save(handle("a.tui"), "replacement")).rejects.toMatchObject({ code: "io" });
+    expect(docs.aborts).toBe(1);
+  });
+
+  it("serializes the compare-and-write window through Web Locks when available", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: async <T>(name: string, work: () => Promise<T>) => {
+          requested.push(name);
+          return work();
+        },
+      },
+    });
+    await store.save(handle("locked.tui"), "body");
+    expect(requested).toEqual(["taui:opfs:locked.tui"]);
+  });
+
+  it("propagates a non-missing conflict preflight failure", async () => {
+    await store.save(handle("a.tui"), "original");
+    const docs = root.dirs.get("docs") as FakeDir;
+    docs.getFileFailure = new Error("stat failed");
+    await expect(
+      store.save(handle("a.tui"), "replacement", { expectedModifiedAt: 1 }),
+    ).rejects.toMatchObject({
+      code: "io",
+      cause: expect.objectContaining({ message: "stat failed" }),
+    });
+  });
+
   it("keeps legacy keys opaque but never exposes control or bidi text in labels", async () => {
     const key = "legacy\u202Egnp.tui";
     await store.save(handle(key), "body");
@@ -274,6 +323,15 @@ describe("the picker", () => {
     }));
     const { handle: created } = await savingByHandle.saveAs("new body", "s.tui");
     expect(created.key).toBe("existing.tui");
+  });
+
+  it("accepts an explicit picker choice when opening", async () => {
+    await store.save(handle("existing.tui"), "body");
+    const picked = makeStore(async (entries) => ({
+      handle: entries[0] ?? "existing.tui",
+      overwrite: false,
+    }));
+    expect((await picked.openWithPicker()).content).toBe("body");
   });
 
   it("refuses Save As over an existing name without explicit overwrite intent", async () => {
@@ -356,6 +414,36 @@ describe("recovery history", () => {
     expect((await store.listRecoveries()).map((entry) => entry.content)).toEqual(["valid"]);
   });
 
+  it("wraps recovery sequence numbers after the six-digit ceiling", async () => {
+    const recovery = await root.getDirectoryHandle("recovery", { create: true });
+    const directory = await recovery.getDirectoryHandle("a.tui", { create: true });
+    directory.files.set("000001.json", { content: "old", lastModified: now() });
+    directory.files.set("999999.json", { content: "last", lastModified: now() });
+
+    await store.writeRecovery("a.tui", "wrapped");
+    expect(snapshotNames("a.tui")).toContain("000002.json");
+  });
+
+  it("rejects a recovery payload over the document byte limit", async () => {
+    await expect(store.writeRecovery("a.tui", "x".repeat(MAX_DOCUMENT_BYTES))).rejects.toThrow(
+      /size limit/u,
+    );
+  });
+
+  it("uses filenames to break equal-age pruning ties deterministically", async () => {
+    const recovery = await root.getDirectoryHandle("recovery", { create: true });
+    const directory = await recovery.getDirectoryHandle("a.tui", { create: true });
+    for (let index = 1; index <= RECOVERY_HISTORY_LIMIT; index++) {
+      directory.files.set(`${String(index).padStart(6, "0")}.json`, {
+        content: JSON.stringify({ content: `${index}`, savedAt: index }),
+        lastModified: 42,
+      });
+    }
+    await store.writeRecovery("a.tui", "newest");
+    expect(snapshotNames("a.tui")).toHaveLength(RECOVERY_HISTORY_LIMIT);
+    expect((await store.listRecoveries())[0]?.content).toBe("newest");
+  });
+
   it("bounds recovery count across documents, not only within one history", async () => {
     for (let document = 0; document < 6; document++) {
       for (let snapshot = 0; snapshot < RECOVERY_HISTORY_LIMIT; snapshot++) {
@@ -375,6 +463,31 @@ describe("recovery history", () => {
     const found = await store.listRecoveries();
     expect(found).toHaveLength(1);
     expect(found[0]?.sourceModifiedAt).toBeNull();
+  });
+
+  it("offers a missing document recovery even when another document directory exists", async () => {
+    await store.save(handle("other.tui"), "saved");
+    await store.writeRecovery("missing.tui", "work in progress");
+    expect((await store.listRecoveries()).map((entry) => entry.content)).toEqual([
+      "work in progress",
+    ]);
+  });
+
+  it("skips recoveries beyond the startup byte budget", async () => {
+    const recovery = await root.getDirectoryHandle("recovery", { create: true });
+    const directory = await recovery.getDirectoryHandle("large.tui", { create: true });
+    directory.files.set("000001.json", {
+      content: "x".repeat(RECOVERY_STARTUP_BYTES + 1),
+      lastModified: now(),
+    });
+    expect(await store.listRecoveries()).toEqual([]);
+  });
+
+  it("contains a recovery stat race to the affected snapshot", async () => {
+    await store.writeRecovery("a.tui", "safe");
+    const directory = root.dirs.get("recovery")?.dirs.get("a.tui") as FakeDir;
+    directory.getFileFailure = new NotFound("removed between list and stat");
+    expect(await store.listRecoveries()).toEqual([]);
   });
 
   it("hides the whole history once the document is saved cleanly", async () => {
@@ -402,6 +515,11 @@ describe("recovery history", () => {
   });
 
   it("treats clearing a document with no history as a no-op", async () => {
+    await expect(store.clearRecovery("never-touched")).resolves.toBeUndefined();
+  });
+
+  it("treats a missing recovery under an existing parent as a no-op", async () => {
+    await store.writeRecovery("other.tui", "x");
     await expect(store.clearRecovery("never-touched")).resolves.toBeUndefined();
   });
 

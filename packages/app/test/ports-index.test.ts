@@ -124,9 +124,23 @@ describe("createFileStore", () => {
     });
     expect(store.kind).toBe("opfs");
 
-    await expect(store.saveAs("safe", "fallback.tui")).resolves.toMatchObject({
+    const created = await store.saveAs("safe", "fallback.tui");
+    expect(created).toMatchObject({
       handle: { key: "fallback.tui" },
     });
+    await expect(store.openWithPicker()).resolves.toMatchObject({ content: "safe" });
+    await expect(store.openHandle(created.handle)).resolves.toMatchObject({ content: "safe" });
+    await expect(store.save(created.handle, "updated")).resolves.toMatchObject({
+      modifiedAt: expect.any(Number),
+    });
+    await store.writeRecovery("untitled-fallback", "recovery");
+    const [recovery] = await store.listRecoveries();
+    expect(recovery?.content).toBe("recovery");
+    await store.dropRecovery(recovery?.id ?? "");
+    await store.writeRecovery("untitled-fallback", "other");
+    await store.clearRecovery("untitled-fallback");
+    await store.pushRecent(created.handle);
+    expect((await store.listRecent())[0]?.handle.key).toBe("fallback.tui");
     await Promise.resolve();
 
     expect(store.kind).toBe("memory");
@@ -137,6 +151,24 @@ describe("createFileStore", () => {
     expect(statuses).toEqual([
       { backend: "memory", persistence: "unavailable", usage: null, quota: null },
     ]);
+  });
+
+  it("routes calls through a successfully probed OPFS façade", async () => {
+    const missing = new Error("missing");
+    missing.name = "NotFoundError";
+    const root = {
+      getDirectoryHandle: async () => {
+        throw missing;
+      },
+    };
+    setGlobals({
+      navigator: { storage: { getDirectory: () => Promise.resolve(root) } },
+      FileSystemDirectoryHandle: class {},
+    });
+
+    const store = createFileStore({ picker });
+    await expect(store.listRecent()).resolves.toEqual([]);
+    expect(store.kind).toBe("opfs");
   });
 
   it("requests persistence and reports a finite quota after the root probe", async () => {
@@ -163,6 +195,66 @@ describe("createFileStore", () => {
     expect(statuses).toEqual([
       { backend: "opfs", persistence: "not-granted", usage: 1_024, quota: 8_192 },
     ]);
+  });
+
+  it("uses the persisted fallback and rejects invalid quota estimates", async () => {
+    const statuses: unknown[] = [];
+    setGlobals({
+      navigator: {
+        storage: {
+          getDirectory: () => Promise.resolve({}),
+          persisted: async () => true,
+          estimate: async () => ({ usage: Number.POSITIVE_INFINITY, quota: -1 }),
+        },
+      },
+      FileSystemDirectoryHandle: class {},
+    });
+
+    createFileStore({ picker, onStorageStatus: (status) => statuses.push(status) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(statuses).toEqual([
+      { backend: "opfs", persistence: "granted", usage: null, quota: null },
+    ]);
+  });
+
+  it.each([
+    ["persist", true, "granted"],
+    ["persisted", false, "not-granted"],
+  ] as const)("reports the %s result", async (method, result, expected) => {
+    const statuses: unknown[] = [];
+    setGlobals({
+      navigator: {
+        storage: {
+          getDirectory: () => Promise.resolve({}),
+          [method]: async () => result,
+        },
+      },
+      FileSystemDirectoryHandle: class {},
+    });
+    createFileStore({ picker, onStorageStatus: (status) => statuses.push(status) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(statuses).toEqual([
+      { backend: "opfs", persistence: expected, usage: null, quota: null },
+    ]);
+  });
+
+  it.each([
+    [new Error(" "), "access was rejected"],
+    ["plain rejection", "plain rejection"],
+    [null, "access was rejected"],
+  ])("sanitises an OPFS probe rejection %p", async (rejection, message) => {
+    const fallback: string[] = [];
+    setGlobals({
+      navigator: { storage: { getDirectory: () => Promise.reject(rejection) } },
+      FileSystemDirectoryHandle: class {},
+    });
+    const store = createFileStore({
+      picker: async () => "fallback.tui",
+      onFallback: (reported) => fallback.push(reported),
+    });
+    await store.saveAs("safe", "fallback.tui");
+    expect(fallback[0]).toContain(`(${message})`);
   });
 
   it("keeps working OPFS when persistence and estimate APIs reject", async () => {

@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  errorMessage,
   FileStoreError,
   isCancelled,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
+  RECOVERY_STARTUP_BYTES,
+  RECOVERY_TOTAL_LIMIT,
 } from "../src/ports/file-store.js";
 import { createMemoryFileStore, type MemoryFileStore } from "../src/ports/memory-file-store.js";
 
@@ -177,6 +180,14 @@ describe("cancellation", () => {
   });
 });
 
+describe("error messages", () => {
+  it("normalises values that JavaScript permits code to throw", () => {
+    expect(errorMessage(new Error("broken"))).toBe("broken");
+    expect(errorMessage("plain failure")).toBe("plain failure");
+    expect(errorMessage(null)).toBe("unknown error");
+  });
+});
+
 describe("recovery", () => {
   it("offers a recovery blob newer than its source", async () => {
     const store = createMemoryFileStore({ now, initial: { "a.tui": "saved" } });
@@ -252,6 +263,21 @@ describe("recovery history", () => {
     // The first four are gone; the newest survives.
     expect(history[0]).toBe("v4");
     expect(history.at(-1)).toBe(`v${RECOVERY_HISTORY_LIMIT + 3}`);
+  });
+
+  it("bounds recovery count across all documents", async () => {
+    const store = createMemoryFileStore({ now });
+    for (let document = 0; document < RECOVERY_TOTAL_LIMIT + 1; document++) {
+      await store.writeRecovery(`doc-${document}.tui`, `${document}`);
+    }
+    expect(await store.listRecoveries()).toHaveLength(RECOVERY_TOTAL_LIMIT);
+    expect(Object.values(store.recoverySnapshot()).flat()).toHaveLength(RECOVERY_TOTAL_LIMIT);
+  });
+
+  it("does not retain a recovery payload beyond the startup byte budget", async () => {
+    const store = createMemoryFileStore({ now });
+    await store.writeRecovery("oversized.tui", "x".repeat(RECOVERY_STARTUP_BYTES + 1));
+    expect(await store.listRecoveries()).toEqual([]);
   });
 
   it("gives every snapshot a distinct id, across documents too", async () => {

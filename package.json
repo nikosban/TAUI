@@ -10,11 +10,16 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter @tui-designer/app test:e2e",
-    "test:coverage": "pnpm --filter @tui-designer/core test --coverage",
+    "test:coverage": "pnpm --filter @tui-designer/core test --coverage && pnpm --filter @tui-designer/app test --coverage",
     "typecheck": "pnpm -r typecheck",
     "check": "biome check .",
     "check:fix": "biome check --write .",
-    "audit": "pnpm audit --audit-level=low --ignore-registry-errors",
+    "check:arch": "pnpm -r check:arch",
+    "check:generated": "pnpm --filter @tui-designer/core check:generated",
+    "check:unused": "pnpm -r check:unused",
+    "audit": "pnpm run audit:prod && pnpm run audit:dev",
+    "audit:prod": "pnpm audit --prod --audit-level=low --ignore-registry-errors",
+    "audit:dev": "pnpm audit --dev --audit-level=high --ignore-registry-errors",
     "audit:signatures": "pnpm audit signatures"
   },
   "devDependencies": {

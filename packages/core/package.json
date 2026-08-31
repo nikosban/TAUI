@@ -34,6 +34,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "check:arch": "tsx scripts/check-arch.ts",
+    "check:generated": "pnpm gen:box-table && git diff --exit-code -- src/ops/box-table.ts",
     "check:unused": "knip",
     "gen:box-table": "tsx scripts/gen-box-table.ts && biome format --write src/ops/box-table.ts",
     "lint:pkg": "pnpm build && publint && attw --pack .",

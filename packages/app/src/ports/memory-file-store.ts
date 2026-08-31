@@ -158,11 +158,13 @@ export function createMemoryFileStore(opts: MemoryFileStoreOptions = {}): Memory
       );
       while (all.length > RECOVERY_TOTAL_LIMIT || totalBytes > RECOVERY_TOTAL_BYTES) {
         const oldest = all.shift();
+        /* c8 ignore next -- the loop condition proves `all` is non-empty. */
         if (oldest === undefined) break;
         totalBytes -= new TextEncoder().encode(oldest.entry.content).byteLength;
-        const owned = recoveries.get(oldest.owner);
-        const index = owned?.findIndex((entry) => entry.id === oldest.entry.id) ?? -1;
-        if (owned === undefined || index < 0) continue;
+        // `all` is a synchronous projection of `recoveries`, so both lookups are
+        // guaranteed until this exact entry is removed.
+        const owned = recoveries.get(oldest.owner) as RecoveryEntry[];
+        const index = owned.findIndex((entry) => entry.id === oldest.entry.id);
         owned.splice(index, 1);
         if (owned.length === 0) recoveries.delete(oldest.owner);
       }
