@@ -68,6 +68,40 @@ async function saveAs(page: Page, name: string): Promise<void> {
   await expect(page.getByText("○ saved")).toBeVisible();
 }
 
+test("keeps modal focus contained and exposes keyboard layer controls", async ({ page }) => {
+  await openEditor(page);
+
+  const zoomIn = page.getByRole("button", { name: "Zoom in" });
+  await zoomIn.press("ControlOrMeta+Shift+s");
+  const dialog = page.getByRole("dialog", { name: "Save as" });
+  const name = dialog.getByRole("textbox", { name: "File name" });
+  const save = dialog.getByRole("button", { name: "Save" });
+  await expect(name).toBeFocused();
+  for (const selector of [".app > header", ".app > .workspace", ".app > footer"]) {
+    await expect(page.locator(selector)).toHaveAttribute("inert", "");
+  }
+
+  await name.press("Shift+Tab");
+  await expect(save).toBeFocused();
+  await save.press("Tab");
+  await expect(name).toBeFocused();
+  await name.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(zoomIn).toBeFocused();
+
+  const layers = page.getByRole("region", { name: "Layers" });
+  await layers.getByRole("button", { name: "+ add" }).click();
+  let layerRows = layers.getByRole("button", { name: /layer \d+ of \d+/u });
+  const addedLabel = await layerRows.first().getAttribute("aria-label");
+  await layerRows.first().press("ArrowDown");
+  layerRows = layers.getByRole("button", { name: /layer \d+ of \d+/u });
+  expect(await layerRows.nth(1).getAttribute("aria-label")).toContain(
+    addedLabel?.split(",")[0] ?? "Layer",
+  );
+  await layerRows.nth(1).press("F2");
+  await expect(layers.getByRole("textbox", { name: /Rename/u })).toBeFocused();
+});
+
 async function openDocument(page: Page, name: string): Promise<void> {
   await page.keyboard.press("ControlOrMeta+o");
   const dialog = page.getByRole("dialog", { name: "Open" });

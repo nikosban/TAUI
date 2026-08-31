@@ -1,0 +1,13 @@
+ACCESSIBILITY AND KEYBOARD RELEASE BASELINE
+
+- Run the automated accessibility suite for the editor landmarks and every application dialog.
+- Tab through settings, tools, inspector controls, layer controls, notices, and status controls; the focus ring must remain visible.
+- Open every dialog from the keyboard and confirm initial focus, forward/reverse focus wrapping, Escape dismissal, inert background content, and focus restoration.
+- Confirm tool and file shortcuts, undo/redo, zoom, layer cycling, layer reordering with arrow keys, and layer/palette rename with F2.
+- Enable reduced motion at the operating-system level and confirm transient feedback does not animate continuously.
+
+CANVAS ALTERNATIVE AND KNOWN LIMITATIONS
+
+The canvas exposes document dimensions, active layer, active tool, and exact selected-region coordinates and size to assistive technology. The Inspector also exposes stable measurements and can copy them as JSON.
+
+Direct cell painting, pointer-position inspection, marquee placement, and canvas pan/zoom still require a visual pointer workflow. There is not yet a cell-by-cell keyboard grid or fully navigable accessibility-tree representation of the composed terminal image. Keep this limitation in release notes until a non-visual canvas interaction model is implemented.

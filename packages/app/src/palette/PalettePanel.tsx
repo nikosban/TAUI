@@ -102,9 +102,9 @@ export function PalettePanel({
   const editProblem = editing === null ? null : nameProblem(doc, editing.value, editing.id);
 
   return (
-    <section>
+    <section aria-labelledby="palette-heading">
       <div className="section-head">
-        <h2>Palette</h2>
+        <h2 id="palette-heading">Palette</h2>
         <button
           type="button"
           className="chip"
@@ -148,6 +148,8 @@ export function PalettePanel({
               type="button"
               className={inBrushFg ? "swatch active" : "swatch"}
               title={`Paint foreground with "${entry.name}"`}
+              aria-label={`Paint foreground with ${entry.name}`}
+              aria-pressed={inBrushFg}
               style={{ background: cssColor(entry.color, "bg", theme) }}
               onClick={() => onBrush({ fg: { kind: "palette", id: entry.id } })}
             />
@@ -157,6 +159,7 @@ export function PalettePanel({
                 className="layer-name-input"
                 // biome-ignore lint/a11y/noAutofocus: the field only exists in response to a click
                 autoFocus
+                aria-label={`Rename ${entry.name}`}
                 value={editing.value}
                 onChange={(e) => setEditing({ id: entry.id, value: e.target.value })}
                 onBlur={commitRename}
@@ -171,8 +174,17 @@ export function PalettePanel({
                 type="button"
                 className="palette-name"
                 title="Double-click to rename"
+                aria-label={`${entry.name}, ${usage.cells} painted cells; activate to choose a replacement colour, or press F2 to rename`}
+                aria-expanded={recolouring === entry.id}
                 onDoubleClick={() => setEditing({ id: entry.id, value: entry.name })}
                 onClick={() => setRecolouring(recolouring === entry.id ? null : entry.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "F2") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setEditing({ id: entry.id, value: entry.name });
+                  }
+                }}
               >
                 {entry.name}
                 <span className="layer-count" title={`${usage.cells} cells`}>
@@ -185,6 +197,8 @@ export function PalettePanel({
               type="button"
               className={inBrushBg ? "chip tiny active" : "chip tiny"}
               title={`Paint background with "${entry.name}"`}
+              aria-label={`Paint background with ${entry.name}`}
+              aria-pressed={inBrushBg}
               onClick={() => onBrush({ bg: { kind: "palette", id: entry.id } })}
             >
               bg
@@ -193,6 +207,7 @@ export function PalettePanel({
               type="button"
               className="chip tiny danger"
               title="Delete this entry"
+              aria-label={`Delete ${entry.name}`}
               onClick={() => remove(entry.id)}
             >
               ✕
@@ -211,6 +226,7 @@ export function PalettePanel({
               type="button"
               className="swatch"
               title={`Recolour to ${swatch.label}`}
+              aria-label={`Recolour ${rows.find((row) => row.entry.id === recolouring)?.entry.name ?? "palette entry"} to ${swatch.label}`}
               style={{ background: cssColor(swatch.color, "bg", theme) }}
               onClick={() => {
                 onEdit(setPaletteColor(doc, recolouring, swatch.color));

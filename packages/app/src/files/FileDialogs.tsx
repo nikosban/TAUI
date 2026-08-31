@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Modal } from "../a11y/Modal.js";
 import type { DocHandle, PickerFn, RecoveryInfo, SavePickerChoice } from "../ports/file-store.js";
 import { filenameProblem, safeDocumentFilename } from "../safe-filename.js";
 
@@ -105,92 +106,82 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
   };
 
   return (
-    <div className="modal-backdrop">
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={saving ? "Save as" : "Open"}
-      >
-        <h2>{saving ? "Save as" : "Open"}</h2>
+    <Modal title={saving ? "Save as" : "Open"} onDismiss={() => request.resolve(null)}>
+      {saving && (
+        <label className="modal-field">
+          File name
+          <input
+            data-initial-focus
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setOverwriteTarget(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && nameError === null) submitSave(name.trim());
+              if (e.key === "Escape") request.resolve(null);
+              e.stopPropagation();
+            }}
+          />
+          {nameError !== null && <span className="warn small">{nameError}</span>}
+        </label>
+      )}
 
+      {request.entries.length === 0 ? (
+        <p className="muted small">
+          {saving ? "No documents yet." : "No documents in browser storage yet."}
+        </p>
+      ) : (
+        <ul className="modal-list">
+          {request.entries.map((entry) => (
+            <li key={entry.key}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (saving) {
+                    setName(entry.key);
+                    setOverwriteTarget(entry.key);
+                  } else {
+                    request.resolve(entry);
+                  }
+                }}
+                title={entry.display}
+              >
+                {entry.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {saving && overwriteTarget !== null && (
+        <p className="warn small" role="alert">
+          {overwriteTarget} already exists. Replacing it cannot be undone.
+        </p>
+      )}
+
+      <div className="modal-actions">
+        <button type="button" className="chip" onClick={() => request.resolve(null)}>
+          Cancel
+        </button>
         {saving && (
-          <label className="modal-field">
-            File name
-            <input
-              // biome-ignore lint/a11y/noAutofocus: a modal that needs a name should accept typing immediately
-              autoFocus
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setOverwriteTarget(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && nameError === null) submitSave(name.trim());
-                if (e.key === "Escape") request.resolve(null);
-                e.stopPropagation();
-              }}
-            />
-            {nameError !== null && <span className="warn small">{nameError}</span>}
-          </label>
-        )}
-
-        {request.entries.length === 0 ? (
-          <p className="muted small">
-            {saving ? "No documents yet." : "No documents in browser storage yet."}
-          </p>
-        ) : (
-          <ul className="modal-list">
-            {request.entries.map((entry) => (
-              <li key={entry.key}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (saving) {
-                      setName(entry.key);
-                      setOverwriteTarget(entry.key);
-                    } else {
-                      request.resolve(entry);
-                    }
-                  }}
-                  title={entry.display}
-                >
-                  {entry.label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {saving && overwriteTarget !== null && (
-          <p className="warn small" role="alert">
-            {overwriteTarget} already exists. Replacing it cannot be undone.
-          </p>
-        )}
-
-        <div className="modal-actions">
-          <button type="button" className="chip" onClick={() => request.resolve(null)}>
-            Cancel
+          <button
+            type="button"
+            className={overwriteTarget === null ? "chip active" : "chip danger"}
+            disabled={nameError !== null}
+            onClick={() => {
+              if (overwriteTarget !== null) {
+                request.resolve({ handle: overwriteTarget, overwrite: true });
+              } else {
+                submitSave(name.trim());
+              }
+            }}
+          >
+            {overwriteTarget === null ? "Save" : "Replace existing"}
           </button>
-          {saving && (
-            <button
-              type="button"
-              className={overwriteTarget === null ? "chip active" : "chip danger"}
-              disabled={nameError !== null}
-              onClick={() => {
-                if (overwriteTarget !== null) {
-                  request.resolve({ handle: overwriteTarget, overwrite: true });
-                } else {
-                  submitSave(name.trim());
-                }
-              }}
-            >
-              {overwriteTarget === null ? "Save" : "Replace existing"}
-            </button>
-          )}
-        </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -244,47 +235,44 @@ export function RecoveryDialog({
   onDismiss,
 }: RecoveryDialogProps): React.JSX.Element {
   return (
-    <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Recover unsaved work">
-        <h2>Unsaved work found</h2>
-        <p className="muted small">
-          These snapshots are newer than the file they came from. Restoring one loads it as a new
-          unsaved document, so the file on disk is left alone until you save.
-        </p>
+    <Modal title="Recover unsaved work" onDismiss={onDismiss}>
+      <p className="muted small">
+        These snapshots are newer than the file they came from. Restoring one loads it as a new
+        unsaved document, so the file on disk is left alone until you save.
+      </p>
 
-        <ul className="modal-list recovery-list">
-          {snapshots.map((info) => (
-            <li key={info.id}>
-              <button
-                type="button"
-                className="recovery-restore"
-                onClick={() => onRestore(info)}
-                title={info.handle.display}
-              >
-                <span className="recovery-name">{recoveryLabel(info.handle.key)}</span>
-                <span className="recovery-age">{relativeTime(info.recoveredAt, now)}</span>
-              </button>
-              <button
-                type="button"
-                className="chip tiny danger recovery-discard"
-                onClick={() => onDiscard(info)}
-                aria-label={`Discard recovery for ${recoveryLabel(info.handle.key)}`}
-              >
-                Discard
-              </button>
-            </li>
-          ))}
-        </ul>
+      <ul className="modal-list recovery-list">
+        {snapshots.map((info) => (
+          <li key={info.id}>
+            <button
+              type="button"
+              className="recovery-restore"
+              onClick={() => onRestore(info)}
+              title={info.handle.display}
+            >
+              <span className="recovery-name">{recoveryLabel(info.handle.key)}</span>
+              <span className="recovery-age">{relativeTime(info.recoveredAt, now)}</span>
+            </button>
+            <button
+              type="button"
+              className="chip tiny danger recovery-discard"
+              onClick={() => onDiscard(info)}
+              aria-label={`Discard recovery for ${recoveryLabel(info.handle.key)}`}
+            >
+              Discard
+            </button>
+          </li>
+        ))}
+      </ul>
 
-        <div className="modal-actions">
-          <button type="button" className="chip" onClick={onDismiss}>
-            Not now
-          </button>
-          <button type="button" className="chip danger" onClick={onDiscardAll}>
-            Discard all
-          </button>
-        </div>
+      <div className="modal-actions">
+        <button type="button" className="chip" onClick={onDismiss}>
+          Not now
+        </button>
+        <button type="button" className="chip danger" onClick={onDiscardAll}>
+          Discard all
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

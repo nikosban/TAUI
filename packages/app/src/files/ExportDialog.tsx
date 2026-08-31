@@ -9,6 +9,7 @@
 
 import type { TuiDocument } from "@tui-designer/core";
 import { useState } from "react";
+import { Modal } from "../a11y/Modal.js";
 import type { CellMetrics } from "../canvas/metrics.js";
 import type { Theme } from "../canvas/paint-plan.js";
 import {
@@ -75,37 +76,33 @@ export function ExportDialog({
   };
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Export">
-        <h2>Export</h2>
-
-        <div className="row">
-          {EXPORT_FORMATS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className={entry.id === format ? "chip wide active" : "chip wide"}
-              onClick={() => setFormat(entry.id)}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-
-        <p className="muted small">{info.note}</p>
-        <p className="muted small">
-          {doc.cols}×{doc.rows} cells → <strong>{filename}</strong>
-        </p>
-
-        <div className="modal-actions">
-          <button type="button" className="chip" onClick={onClose} disabled={busy}>
-            Cancel
+    <Modal title="Export" onDismiss={onClose}>
+      <div className="row">
+        {EXPORT_FORMATS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className={entry.id === format ? "chip wide active" : "chip wide"}
+            onClick={() => setFormat(entry.id)}
+          >
+            {entry.label}
           </button>
-          <button type="button" className="chip active" onClick={() => void run()} disabled={busy}>
-            {busy ? "Exporting…" : "Export"}
-          </button>
-        </div>
+        ))}
       </div>
-    </div>
+
+      <p className="muted small">{info.note}</p>
+      <p className="muted small">
+        {doc.cols}×{doc.rows} cells → <strong>{filename}</strong>
+      </p>
+
+      <div className="modal-actions">
+        <button type="button" className="chip" onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button type="button" className="chip active" onClick={() => void run()} disabled={busy}>
+          {busy ? "Exporting…" : "Export"}
+        </button>
+      </div>
+    </Modal>
   );
 }

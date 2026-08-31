@@ -88,9 +88,9 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
   };
 
   return (
-    <section className="layers">
+    <section className="layers" aria-labelledby="layers-heading">
       <div className="section-head">
-        <h2>Layers</h2>
+        <h2 id="layers-heading">Layers</h2>
         <button
           type="button"
           className="chip"
@@ -138,7 +138,8 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className="layer-eye"
                 title={layer.visible ? "Hide layer" : "Show layer"}
-                aria-label={layer.visible ? "Hide layer" : "Show layer"}
+                aria-label={`${layer.visible ? "Hide" : "Show"} ${layer.name}`}
+                aria-pressed={layer.visible}
                 onClick={() => onEdit(setLayerVisible(doc, layer.id, !layer.visible))}
               >
                 {layer.visible ? "◉" : "◌"}
@@ -147,7 +148,8 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className="layer-lock"
                 title={layer.locked ? "Unlock layer" : "Lock layer"}
-                aria-label={layer.locked ? "Unlock layer" : "Lock layer"}
+                aria-label={`${layer.locked ? "Unlock" : "Lock"} ${layer.name}`}
+                aria-pressed={layer.locked}
                 onClick={() => onEdit(setLayerLocked(doc, layer.id, !layer.locked))}
               >
                 {layer.locked ? "🔒" : "🔓"}
@@ -158,6 +160,7 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                   className="layer-name-input"
                   // biome-ignore lint/a11y/noAutofocus: the field only exists in response to a rename click
                   autoFocus
+                  aria-label={`Rename ${layer.name}`}
                   value={editing.value}
                   onChange={(e) => setEditing({ id: layer.id, value: e.target.value })}
                   onBlur={commitRename}
@@ -172,8 +175,35 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                   type="button"
                   className="layer-name"
                   title="Click to select, double-click to rename"
+                  aria-label={`${layer.name}, layer ${displayIndex + 1} of ${rows.length}, ${cells} painted cells`}
+                  aria-current={isActive ? "true" : undefined}
                   onClick={() => onEdit(setActiveLayer(doc, layer.id))}
                   onDoubleClick={() => setEditing({ id: layer.id, value: layer.name })}
+                  onKeyDown={(event) => {
+                    if (event.key === "F2") {
+                      event.preventDefault();
+                      setEditing({ id: layer.id, value: layer.name });
+                    } else if (event.key === "ArrowUp" && displayIndex > 0) {
+                      event.preventDefault();
+                      onEdit(
+                        moveLayer(
+                          doc,
+                          layer.id,
+                          reorderTargetIndex(displayIndex - 1, doc.layers.length),
+                        ),
+                      );
+                    } else if (event.key === "ArrowDown" && displayIndex < rows.length - 1) {
+                      event.preventDefault();
+                      onEdit(
+                        moveLayer(
+                          doc,
+                          layer.id,
+                          reorderTargetIndex(displayIndex + 1, doc.layers.length),
+                        ),
+                      );
+                    }
+                    event.stopPropagation();
+                  }}
                 >
                   {layer.name}
                   <span className="layer-count">{cells}</span>
@@ -184,6 +214,8 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className={layer.excludeFromHandoff === true ? "chip tiny active" : "chip tiny"}
                 title="Exclude from handoff panel detection (M6)"
+                aria-label={`${layer.excludeFromHandoff === true ? "Include" : "Exclude"} ${layer.name} in handoff panel detection`}
+                aria-pressed={layer.excludeFromHandoff === true}
                 onClick={() =>
                   onEdit(setExcludeFromHandoff(doc, layer.id, layer.excludeFromHandoff !== true))
                 }
@@ -194,6 +226,7 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className="chip tiny"
                 title="Duplicate layer"
+                aria-label={`Duplicate ${layer.name}`}
                 onClick={() => onEdit(duplicateLayer(doc, layer.id))}
               >
                 ⧉
@@ -202,6 +235,7 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className="chip tiny"
                 title={isBottom ? "Nothing below to merge into" : "Merge into the layer below"}
+                aria-label={`Merge ${layer.name} into the layer below`}
                 disabled={!canMergeDown(doc, layer.id)}
                 onClick={() => merge(layer.id)}
               >
@@ -211,6 +245,7 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                 type="button"
                 className="chip tiny danger"
                 title={canDelete(doc) ? "Delete layer" : "A document keeps at least one layer"}
+                aria-label={`Delete ${layer.name}`}
                 disabled={!canDelete(doc)}
                 onClick={() => remove(layer.id)}
               >
@@ -221,8 +256,9 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
         })}
       </ul>
       <p className="muted small">
-        Topmost row wins a contested cell. Drag to reorder; <kbd>[</kbd> / <kbd>]</kbd> cycle the
-        active layer. The number is painted cells.
+        Topmost row wins a contested cell. Drag or use ↑/↓ on a focused layer to reorder; press
+        <kbd>F2</kbd> to rename; <kbd>[</kbd> / <kbd>]</kbd> cycle the active layer. The number is
+        painted cells.
       </p>
     </section>
   );

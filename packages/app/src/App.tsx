@@ -849,22 +849,28 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
         </label>
       </header>
 
-      {warning !== null && <div className="banner warn">{warning}</div>}
+      {warning !== null && (
+        <div className="banner warn" role="alert">
+          {warning}
+        </div>
+      )}
       {clamped && (
-        <div className="banner info">
+        <div className="banner info" role="status">
           Line height clamped to {prefs.lineHeightFactor.toFixed(2)} — beyond that,{" "}
           {prefs.previewFont}&apos;s vertical box characters stop meeting between rows.
         </div>
       )}
 
       <div className="workspace">
-        <nav className={`toolrail${lockFlashing ? " lock-flash" : ""}`}>
+        <nav className={`toolrail${lockFlashing ? " lock-flash" : ""}`} aria-label="Tools">
           {TOOL_RAIL.map(({ tool, glyph, label, ready }) => (
             <button
               key={tool}
               type="button"
               className={tools.activeTool === tool ? "tool active" : "tool"}
               title={`${label} (${hintFor(tool)})${ready ? "" : " — G3"}`}
+              aria-label={`${label} tool (${hintFor(tool)})`}
+              aria-pressed={tools.activeTool === tool}
               disabled={!ready}
               onClick={() => {
                 if (controller.isActive()) {
@@ -880,8 +886,9 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
           ))}
         </nav>
 
-        <div
+        <main
           className="canvas-viewport"
+          aria-label="Terminal document canvas"
           ref={viewportRef}
           onWheel={(e) => {
             e.preventDefault();
@@ -899,8 +906,18 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
             }
           }}
         >
+          <p id="canvas-summary" className="sr-only" aria-live="polite">
+            {doc.cols} by {doc.rows} terminal cells. Active layer: {activeLayer?.name ?? "none"}.
+            Active tool: {tools.activeTool}.
+            {tools.selection === null
+              ? " No selected region."
+              : ` Selected region: ${tools.selection.rows} rows by ${tools.selection.cols} columns, starting at row ${tools.selection.top}, column ${tools.selection.left}.`}
+          </p>
           <canvas
             ref={canvasRef}
+            role="img"
+            aria-label="Terminal document visual preview"
+            aria-describedby="canvas-summary"
             className={spaceHeld || panRef.current !== null ? "panning" : undefined}
             onContextMenu={(e) => e.preventDefault()}
             onPointerDown={(e) => {
@@ -960,9 +977,9 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
             }}
             onPointerLeave={() => setHover(null)}
           />
-        </div>
+        </main>
 
-        <aside className="inspector">
+        <aside className="inspector" aria-label="Inspector and document controls">
           <InspectorPanel
             doc={doc}
             selection={tools.selection}
@@ -986,6 +1003,8 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
                 key={char}
                 type="button"
                 className={tools.brush.char === char ? "chip active" : "chip"}
+                aria-label={`Brush character ${char === " " ? "space" : char}`}
+                aria-pressed={tools.brush.char === char}
                 onClick={() => tools.setBrushChar(char)}
               >
                 {char === " " ? "␠" : char}
@@ -1001,6 +1020,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
                 type="button"
                 title={s.label}
                 aria-label={`foreground ${s.label}`}
+                aria-pressed={colorRefEquals(tools.brush.fg, s.color)}
                 className={colorRefEquals(tools.brush.fg, s.color) ? "swatch active" : "swatch"}
                 style={{ background: cssColor(s.color, "fg", DARK_THEME) }}
                 onClick={() => tools.setBrush({ fg: s.color })}
@@ -1017,6 +1037,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
                 type="button"
                 title={s.label}
                 aria-label={`background ${s.label}`}
+                aria-pressed={colorRefEquals(tools.brush.bg, s.color)}
                 className={colorRefEquals(tools.brush.bg, s.color) ? "swatch active" : "swatch"}
                 style={{ background: cssColor(s.color, "bg", DARK_THEME) }}
                 onClick={() => tools.setBrush({ bg: s.color })}
@@ -1042,6 +1063,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
                 key={style}
                 type="button"
                 className={tools.lineStyle === style ? "chip wide active" : "chip wide"}
+                aria-pressed={tools.lineStyle === style}
                 onClick={() => tools.setLineStyle(style)}
               >
                 {style === "light" ? "─ light" : style === "heavy" ? "━ heavy" : "═ double"}
@@ -1077,6 +1099,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
                 key={a}
                 type="button"
                 className={anchor === a ? "chip wide active" : "chip wide"}
+                aria-pressed={anchor === a}
                 onClick={() => setAnchor(a)}
               >
                 anchor: {a}
@@ -1142,7 +1165,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
       ) : null}
 
       {notices.length > 0 && (
-        <div className="notices">
+        <div className="notices" role="status" aria-live="polite">
           {notices.map((notice) => (
             <p key={notice.id}>{notice.message}</p>
           ))}
@@ -1152,7 +1175,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
         </div>
       )}
 
-      <footer className="statusbar">
+      <footer className="statusbar" role="contentinfo" aria-label="Document status and history">
         <span>{hover === null ? "cell —,—" : `cell ${hover.row},${hover.col}`}</span>
         <span className={editingText ? "editing" : undefined}>
           tool: {tools.activeTool}
@@ -1191,11 +1214,11 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
           redo
         </button>
         <span>{documentStore.getState().history.past.length} steps</span>
-        <button type="button" onClick={() => prefs.zoomOut()}>
+        <button type="button" aria-label="Zoom out" onClick={() => prefs.zoomOut()}>
           −
         </button>
         <span>{Math.round(prefs.zoom * 100)}%</span>
-        <button type="button" onClick={() => prefs.zoomIn()}>
+        <button type="button" aria-label="Zoom in" onClick={() => prefs.zoomIn()}>
           +
         </button>
         <span className={documentStore.getState().dirty ? "dot dirty" : "dot"}>

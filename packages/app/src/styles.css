@@ -4,7 +4,7 @@
   --panel: #14171c;
   --border: #252a33;
   --text: #d8dee9;
-  --muted: #7b8494;
+  --muted: #929baa;
   --accent: #6fa8ff;
 }
 
@@ -110,6 +110,23 @@ button:hover {
   border-color: var(--accent);
 }
 
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .banner {
   padding: 6px 12px;
   font-size: 12px;
@@ -205,6 +222,12 @@ canvas {
   }
   100% {
     background: var(--panel);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolrail.lock-flash {
+    animation: none;
   }
 }
 

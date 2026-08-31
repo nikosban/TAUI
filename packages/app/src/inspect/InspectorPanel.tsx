@@ -33,8 +33,8 @@ export function InspectorPanel({
 }: InspectorPanelProps): React.JSX.Element {
   if (selection === null) {
     return (
-      <section>
-        <h2>Inspect</h2>
+      <section aria-labelledby="inspect-heading">
+        <h2 id="inspect-heading">Inspect</h2>
         <p className="muted small">
           Select a region to measure it. Every number is an exact cell count.
         </p>
@@ -51,9 +51,9 @@ export function InspectorPanel({
       : distance({ row: info.rect.top, col: info.rect.left }, hover);
 
   return (
-    <section>
+    <section aria-labelledby="inspect-heading">
       <div className="section-head">
-        <h2>Inspect</h2>
+        <h2 id="inspect-heading">Inspect</h2>
         <button
           type="button"
           className="chip"
