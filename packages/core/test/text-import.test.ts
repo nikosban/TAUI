@@ -67,6 +67,8 @@ describe("parseText", () => {
     expect(warnings.filter((warning) => /control or format/u.test(warning))).toHaveLength(2);
   });
 
+  // This deliberately exercises the maximum accepted input and area. GitHub's
+  // shared Linux runners can take just over Vitest's 5s default under load.
   it("truncates excessive input and dimensions without throwing", () => {
     const input = "x".repeat(RESOURCE_LIMITS.importTextChars + 5);
     const { doc, warnings } = parseText(input, {
@@ -79,7 +81,7 @@ describe("parseText", () => {
     expect(warnings.join("\n")).toMatch(/truncated input/u);
     expect(warnings.join("\n")).toMatch(/requested cols/u);
     expect(warnings.join("\n")).toMatch(/document limit/u);
-  });
+  }, 15_000);
 
   it("clips natural rows and columns at the resource boundary", () => {
     const tall = parseText("x\n".repeat(RESOURCE_LIMITS.documentRows + 2), { idGen: ids() });
