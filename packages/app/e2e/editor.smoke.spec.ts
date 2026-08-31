@@ -297,6 +297,10 @@ test("downloads every export format and reports PNG encoding failure", async ({ 
     if (format.extension === "png") {
       expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     }
+    // The download event can arrive before the async export handler commits its
+    // close state, especially for PNG encoding on a shared CI runner. Wait for
+    // the modal to release keyboard ownership before opening the next one.
+    await expect(dialog).toBeHidden();
   }
 
   let downloads = 0;
