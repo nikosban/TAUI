@@ -10,6 +10,12 @@ export default defineConfig({
     // Component tests opt into jsdom per file, keeping every pure test honest.
     environment: "node",
     include: ["test/**/*.test.{ts,tsx}"],
+    // CI runs the full suite before its pure-module coverage pass. Loading App
+    // from a second jsdom worker during V8 coverage creates duplicate source-map
+    // branch records in unrelated port modules, while the React/a11y surface is
+    // deliberately outside the coverage include list below. Avoid repeating the
+    // slower axe suite in that duplicate pass; ordinary `pnpm test` still gates it.
+    exclude: process.argv.includes("--coverage") ? ["test/accessibility.test.tsx"] : undefined,
     coverage: {
       provider: "v8",
       // Every pure module. `renderer.ts`, `measure.ts`, and the React components
