@@ -189,6 +189,24 @@ describe("preview lifecycle", () => {
     expect(documentStore.getState().history.present).toBe(before);
   });
 
+  it("undo cancels an in-progress drag before undoing the last committed gesture", () => {
+    drag([0, 0], [2, 4]);
+    const committed = documentStore.getState().history.present;
+    controller.onPointerDown(pointerAt(4, 8));
+    controller.onPointerMove(pointerAt(7, 14));
+    expect(scratch).not.toBeNull();
+
+    controller.history("undo");
+
+    expect(controller.isActive()).toBe(false);
+    expect(scratch).toBeNull();
+    expect(dragRect).toBeNull();
+    expect(toText(documentStore.getState().history.present).trim()).toBe("");
+
+    controller.history("redo");
+    expect(documentStore.getState().history.present).toBe(committed);
+  });
+
   it("keeps the preview derived from the committed present, not the last preview", () => {
     // Sweeping out and back must leave the small box, not a compound of both.
     controller.onPointerDown(pointerAt(0, 0));

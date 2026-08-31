@@ -482,6 +482,20 @@ describe("the text tool end to end", () => {
     expect(toText(documentStore.getState().history.present).split("\n")[0]).toBe("first");
   });
 
+  it("uses the shared history command to flush and undo an open typing burst", () => {
+    controller.onPointerDown(pointerAt(0, 0));
+    type("temporary");
+    expect(controller.isTyping()).toBe(true);
+
+    controller.history("undo");
+
+    expect(controller.isTyping()).toBe(false);
+    expect(controller.isActive()).toBe(false);
+    expect(scratch).toBeNull();
+    expect(caret).toBeNull();
+    expect(toText(documentStore.getState().present()).trim()).toBe("");
+  });
+
   it("starts a new burst when the caret is placed elsewhere", () => {
     controller.onPointerDown(pointerAt(0, 0));
     type("aa");

@@ -9,14 +9,64 @@
  * offering, what a restore does to the handle — is in `ports/file-actions.ts`.
  */
 
-import { useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DocHandle, PickerFn, RecoveryInfo } from "../ports/file-store.js";
 
-interface PickerRequest {
+export interface PickerRequest {
   readonly entries: readonly DocHandle[];
   readonly mode: "open" | "save";
   readonly suggestedName: string;
   readonly resolve: (choice: DocHandle | string | null) => void;
+}
+
+export interface PickerController {
+  readonly picker: PickerFn;
+  /** Settles an owned request during unmount instead of orphaning its promise. */
+  cancelPending(): void;
+}
+
+/**
+ * Owns the one outstanding picker promise.
+ *
+ * A second request is rejected with the port's normal cancellation value; it
+ * never replaces the first resolver. Keeping this independent of React makes the
+ * promise lifecycle directly testable.
+ */
+export function createPickerController(
+  publish: (request: PickerRequest | null) => void,
+): PickerController {
+  let active: PickerRequest | null = null;
+
+  const picker: PickerFn = (entries, mode, suggestedName) =>
+    new Promise((resolve) => {
+      if (active !== null) {
+        resolve(null);
+        return;
+      }
+
+      const request: PickerRequest = {
+        entries,
+        mode,
+        suggestedName: suggestedName ?? "untitled.tui",
+        resolve: (choice) => {
+          // Double clicks and stale rendered buttons are harmless. Only the
+          // request that currently owns the gate may settle it.
+          if (active !== request) return;
+          active = null;
+          publish(null);
+          resolve(choice);
+        },
+      };
+      active = request;
+      publish(request);
+    });
+
+  return {
+    picker,
+    cancelPending() {
+      active?.resolve(null);
+    },
+  };
 }
 
 /**
@@ -29,24 +79,12 @@ interface PickerRequest {
  */
 export function usePicker(): { picker: PickerFn; request: PickerRequest | null } {
   const [request, setRequest] = useState<PickerRequest | null>(null);
+  const controller = useRef<PickerController | null>(null);
+  if (controller.current === null) controller.current = createPickerController(setRequest);
 
-  const picker = useCallback<PickerFn>(
-    (entries, mode, suggestedName) =>
-      new Promise((resolve) => {
-        setRequest({
-          entries,
-          mode,
-          suggestedName: suggestedName ?? "untitled.tui",
-          resolve: (choice) => {
-            setRequest(null);
-            resolve(choice);
-          },
-        });
-      }),
-    [],
-  );
+  useEffect(() => () => controller.current?.cancelPending(), []);
 
-  return { picker, request };
+  return { picker: controller.current.picker, request };
 }
 
 export function PickerDialog({ request }: { request: PickerRequest }): React.JSX.Element {
@@ -131,13 +169,15 @@ export interface RecoveryDialogProps {
 /**
  * A snapshot's document name, as a person would read it.
  *
- * A never-saved document autosaves under a synthetic `untitled-<epoch ms>` key —
- * stable per session, which is what makes its snapshots accumulate into one
- * history. That timestamp is an implementation detail, and showing
- * `untitled-1787944316037` in a recovery prompt asks the reader to parse it.
+ * A never-saved document autosaves under a synthetic
+ * `untitled-<epoch ms>-<generation>` key — stable per document generation, which
+ * makes its snapshots accumulate without mixing two unsaved documents. Those
+ * numbers are implementation details and should not appear in the prompt.
  */
 export function recoveryLabel(key: string): string {
-  return /^untitled-\d+$/u.test(key) ? "Unsaved document" : key;
+  // Accept the pre-generation form too, so recoveries written by an earlier
+  // version keep the same friendly label after upgrading.
+  return /^untitled-\d+(?:-\d+)?$/u.test(key) ? "Unsaved document" : key;
 }
 
 /**

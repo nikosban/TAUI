@@ -45,6 +45,7 @@ describe("recoveryLabel", () => {
   it("hides the synthetic untitled key, which is an implementation detail", () => {
     // "untitled-1787944316037" asks the reader to parse an epoch timestamp.
     expect(recoveryLabel("untitled-1787944316037")).toBe("Unsaved document");
+    expect(recoveryLabel("untitled-1787944316037-4")).toBe("Unsaved document");
     expect(recoveryLabel("untitled-0")).toBe("Unsaved document");
   });
 

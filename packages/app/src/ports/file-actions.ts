@@ -55,6 +55,13 @@ export interface FileActionsDeps {
   readonly notify: (message: string) => void;
 }
 
+type FileOperationKind = "idle" | "save" | "open";
+
+interface FileOperationStatus {
+  readonly kind: FileOperationKind;
+  readonly busy: boolean;
+}
+
 export interface FileActions {
   /** Saves to the current handle, falling back to Save As when there is none. */
   save(): Promise<boolean>;
@@ -71,6 +78,10 @@ export interface FileActions {
   discardAll(): Promise<void>;
   /** The key the current document generation autosaves under. */
   autosaveKey(): string;
+  /** Current interactive operation; autosave is deliberately background-only. */
+  status(): FileOperationStatus;
+  /** Observes operation transitions so React can disable conflicting commands. */
+  subscribe(listener: (status: FileOperationStatus) => void): () => void;
 }
 
 /**
@@ -101,6 +112,20 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   const saveQueue: SaveBatch[] = [];
   let drainingSaves = false;
   let persistenceTail: Promise<void> = Promise.resolve();
+  let operation: FileOperationKind = "idle";
+  const operationListeners = new Set<(status: FileOperationStatus) => void>();
+
+  const operationStatus = (): FileOperationStatus => ({
+    kind: operation,
+    busy: operation !== "idle",
+  });
+
+  const setOperation = (next: FileOperationKind): void => {
+    if (operation === next) return;
+    operation = next;
+    const status = operationStatus();
+    for (const listener of operationListeners) listener(status);
+  };
 
   const inPersistenceOrder = <T>(work: () => Promise<T>): Promise<T> => {
     const result = persistenceTail.then(work, work);
@@ -201,6 +226,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   const drainSaves = async (): Promise<void> => {
     if (drainingSaves) return;
     drainingSaves = true;
+    setOperation("save");
     try {
       while (saveQueue.length > 0) {
         const batch = saveQueue.shift() as SaveBatch;
@@ -209,6 +235,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       }
     } finally {
       drainingSaves = false;
+      setOperation("idle");
       // A request can be queued by a completion handler after the loop observes
       // null but before this task yields back to the browser.
       if (saveQueue.length > 0) void drainSaves();
@@ -217,6 +244,12 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
 
   const requestSave = (kind: SaveKind): Promise<boolean> =>
     new Promise((resolve) => {
+      // An open may own a picker and the document-replacement boundary. Starting
+      // a save beside it could open a second picker or persist the wrong document.
+      if (operation === "open") {
+        resolve(false);
+        return;
+      }
       const generation = deps.snapshot().generation;
       const queued = saveQueue.at(-1);
       if (queued === undefined || queued.generation !== generation) {
@@ -229,6 +262,66 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       void drainSaves();
     });
 
+  const requestOpen = async (
+    read: () => Promise<{ readonly content: string; readonly handle: DocHandle }>,
+    failureLabel: string,
+  ): Promise<boolean> => {
+    // Re-entrant opens and opens during a save are deliberately rejected. The
+    // current picker remains the sole owner of its promise and interaction state.
+    if (operation !== "idle") return false;
+    setOperation("open");
+    try {
+      return await inPersistenceOrder(async () => {
+        const opened = await read();
+        return applyOpened(opened.content, opened.handle);
+      });
+    } catch (error) {
+      if (isCancelled(error)) return false;
+      deps.notify(`${failureLabel}: ${(error as Error).message}`);
+      return false;
+    } finally {
+      setOperation("idle");
+    }
+  };
+
+  let autosaveFlight: Promise<void> | null = null;
+  let autosaveTickQueued = false;
+
+  const performAutosaveTick = (): Promise<void> =>
+    inPersistenceOrder(async () => {
+      const { doc, handle, dirty, revision, generation, busy } = deps.snapshot();
+      const decision = decideAutosave(autosave, { revision, at: deps.now(), busy, dirty });
+      if (decision.t !== "write") return;
+
+      try {
+        await deps.store.writeRecovery(keyFor(handle, generation), serialize(doc));
+        // Advance only on success, so a failed write is retried next tick rather
+        // than silently skipped for good.
+        autosave = decision.state;
+      } catch (error) {
+        deps.notify(`Autosave failed: ${(error as Error).message}`);
+      }
+    });
+
+  const requestAutosaveTick = (): Promise<void> => {
+    if (autosaveFlight !== null) {
+      // At most one trailing evaluation is useful: it observes any edit that
+      // landed while the active write was slow, without accumulating timer calls.
+      autosaveTickQueued = true;
+      return autosaveFlight;
+    }
+
+    autosaveFlight = (async () => {
+      do {
+        autosaveTickQueued = false;
+        await performAutosaveTick();
+      } while (autosaveTickQueued);
+    })().finally(() => {
+      autosaveFlight = null;
+    });
+    return autosaveFlight;
+  };
+
   const actions: FileActions = {
     async save() {
       return requestSave("save");
@@ -239,42 +332,15 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     },
 
     async open() {
-      try {
-        const opened = await deps.store.openWithPicker();
-        return applyOpened(opened.content, opened.handle);
-      } catch (error) {
-        if (isCancelled(error)) return false;
-        deps.notify(`Could not open: ${(error as Error).message}`);
-        return false;
-      }
+      return requestOpen(() => deps.store.openWithPicker(), "Could not open");
     },
 
     async openHandle(handle) {
-      try {
-        const opened = await deps.store.openHandle(handle);
-        return applyOpened(opened.content, opened.handle);
-      } catch (error) {
-        if (isCancelled(error)) return false;
-        deps.notify(`Could not open ${handle.label}: ${(error as Error).message}`);
-        return false;
-      }
+      return requestOpen(() => deps.store.openHandle(handle), `Could not open ${handle.label}`);
     },
 
     async tick() {
-      await inPersistenceOrder(async () => {
-        const { doc, handle, dirty, revision, generation, busy } = deps.snapshot();
-        const decision = decideAutosave(autosave, { revision, at: deps.now(), busy, dirty });
-        if (decision.t !== "write") return;
-
-        try {
-          await deps.store.writeRecovery(keyFor(handle, generation), serialize(doc));
-          // Advance only on success, so a failed write is retried next tick rather
-          // than silently skipped for good.
-          autosave = decision.state;
-        } catch (error) {
-          deps.notify(`Autosave failed: ${(error as Error).message}`);
-        }
-      });
+      await requestAutosaveTick();
     },
 
     async listRecoveries() {
@@ -327,6 +393,15 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     autosaveKey() {
       const { handle, generation } = deps.snapshot();
       return keyFor(handle, generation);
+    },
+
+    status() {
+      return operationStatus();
+    },
+
+    subscribe(listener) {
+      operationListeners.add(listener);
+      return () => operationListeners.delete(listener);
     },
   };
 

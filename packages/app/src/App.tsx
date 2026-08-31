@@ -105,6 +105,18 @@ export function App(): React.JSX.Element {
   const [spaceHeld, setSpaceHeld] = useState(false);
   const panRef = useRef<{ x: number; y: number } | null>(null);
   /**
+   * The captured pointer currently owned by the canvas.
+   *
+   * Clearing this before a normal pointer-up is what distinguishes the expected
+   * `lostpointercapture` event from an unexpected capture loss that must cancel a
+   * preview. Without that distinction, clicking with the text tool would place a
+   * caret and then immediately cancel it when capture is released.
+   */
+  const pointerSessionRef = useRef<{
+    readonly pointerId: number;
+    readonly mode: "gesture" | "pan";
+  } | null>(null);
+  /**
    * Repaint trigger, not a value. The canvas paints itself from `getDoc()` in its
    * own rAF loop; this only nudges React so the *chrome* (status bar, overlay
    * props) re-evaluates after a store change or a preview frame.
@@ -240,6 +252,24 @@ export function App(): React.JSX.Element {
     [bump],
   );
 
+  /** Clears app bookkeeping and releases browser capture for a canceled session. */
+  const releasePointerSession = useCallback((): void => {
+    const session = pointerSessionRef.current;
+    const wasPanning = panRef.current !== null;
+    pointerSessionRef.current = null;
+    panRef.current = null;
+    const canvas = canvasRef.current;
+    if (session !== null && canvas?.hasPointerCapture(session.pointerId)) {
+      try {
+        canvas.releasePointerCapture(session.pointerId);
+      } catch {
+        // Capture may have been released between the check and the call. The app
+        // bookkeeping is already clear, which is the state that matters.
+      }
+    }
+    if (wasPanning) bump();
+  }, [bump]);
+
   // Detects the 1s typing-idle flush. A poll rather than a per-keystroke timer:
   // cheap, and it cannot leak a pending timeout on unmount.
   useEffect(() => {
@@ -299,7 +329,7 @@ export function App(): React.JSX.Element {
           setCaret(null);
           setHover(null);
           setSpaceHeld(false);
-          panRef.current = null;
+          releasePointerSession();
           const toolStore = useToolStore.getState();
           toolStore.setSelection(null);
           // A clipboard is document-relative; carrying it across files makes a
@@ -311,7 +341,7 @@ export function App(): React.JSX.Element {
           if (opts?.dirty === true) documentStore.getState().markDirty();
         },
       }),
-    [askConfirm, controller],
+    [askConfirm, controller, releasePointerSession],
   );
 
   const files = useMemo(
@@ -340,6 +370,12 @@ export function App(): React.JSX.Element {
       }),
     [store, controller, notify, replacement],
   );
+  const [fileStatus, setFileStatus] = useState(() => files.status());
+
+  useEffect(() => {
+    setFileStatus(files.status());
+    return files.subscribe(setFileStatus);
+  }, [files]);
 
   /** Autosave poll. Separate from the gesture tick: minutes, not milliseconds. */
   useEffect(() => {
@@ -436,25 +472,45 @@ export function App(): React.JSX.Element {
       const id = matchShortcut({ key: e.key, mods });
       if (id === null) return;
 
+      const recoveryModalOpen = recoveries !== null && recoveries.length > 0;
+      if (recoveryModalOpen || pickerRequest !== null || exporting) {
+        // A modal owns the keyboard. Escape deliberately settles that one modal;
+        // every other global command waits, so shortcuts cannot stack dialogs or
+        // mutate the document behind one.
+        if (id === "edit.cancel") {
+          if (pickerRequest !== null) pickerRequest.resolve(null);
+          else if (exporting) setExporting(false);
+          else setRecoveries(null);
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // A picker may already have closed while its read/write is still running.
+      // Keep file commands and export single-flight until that operation settles.
+      if (fileStatus.busy && id.startsWith("file.")) {
+        e.preventDefault();
+        return;
+      }
+
       const prefsStore = usePrefsStore.getState();
       const toolStore = useToolStore.getState();
 
       if (id.startsWith("tool.")) {
         // Switching tools mid-gesture cancels it first, per the spec.
         controller.flushTyping("tool-change");
-        if (controller.isActive()) controller.cancel();
+        if (controller.isActive()) {
+          releasePointerSession();
+          controller.cancel();
+        }
         setCaret(null);
         toolStore.setTool(id.slice("tool.".length) as ToolId);
       } else if (id === "edit.undo") {
-        // Flush *before* undoing, or the uncommitted keystrokes are discarded and
-        // the undo removes the previous entry instead.
-        controller.flushTyping("undo-requested");
-        if (controller.isActive()) controller.cancel();
-        documentStore.getState().undo();
+        releasePointerSession();
+        controller.history("undo");
       } else if (id === "edit.redo") {
-        controller.flushTyping("undo-requested");
-        if (controller.isActive()) controller.cancel();
-        documentStore.getState().redo();
+        releasePointerSession();
+        controller.history("redo");
       } else if (id === "edit.cancel") {
         /**
          * Esc unwinds one level of modality at a time, as in Figma.
@@ -473,6 +529,7 @@ export function App(): React.JSX.Element {
         } else if (toolStore.selection !== null && !controller.isActive()) {
           toolStore.setSelection(null);
         } else {
+          releasePointerSession();
           controller.cancel();
           setCaret(null);
         }
@@ -483,7 +540,10 @@ export function App(): React.JSX.Element {
         // Flush any burst so the document being written includes the last
         // characters typed, and close a gesture so a preview is not saved.
         controller.flushTyping("save");
-        if (controller.isActive()) controller.cancel();
+        if (controller.isActive()) {
+          releasePointerSession();
+          controller.cancel();
+        }
         setCaret(null);
         if (id === "file.save") void files.save();
         else void files.saveAs();
@@ -513,7 +573,10 @@ export function App(): React.JSX.Element {
         // Switching the target layer mid-gesture would commit the preview onto the
         // wrong one, so any open gesture or burst is closed first.
         controller.flushTyping("tool-change");
-        if (controller.isActive()) controller.cancel();
+        if (controller.isActive()) {
+          releasePointerSession();
+          controller.cancel();
+        }
         setCaret(null);
         const current = documentStore.getState().present();
         controller.commitEdit(
@@ -546,11 +609,11 @@ export function App(): React.JSX.Element {
     window.addEventListener("keydown", onSpaceDown);
     window.addEventListener("keyup", onSpaceUp);
     const onBlur = () => {
+      releasePointerSession();
       controller.cancel();
       // A Space release can be lost while unfocused, which would leave the canvas
       // stuck in pan mode.
       setSpaceHeld(false);
-      panRef.current = null;
     };
     window.addEventListener("blur", onBlur);
     return () => {
@@ -559,7 +622,16 @@ export function App(): React.JSX.Element {
       window.removeEventListener("keyup", onSpaceUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [controller, editingText, files]);
+  }, [
+    controller,
+    editingText,
+    exporting,
+    files,
+    fileStatus.busy,
+    pickerRequest,
+    recoveries,
+    releasePointerSession,
+  ]);
 
   /**
    * Resizes the document, confirming first when cells would be discarded.
@@ -700,7 +772,10 @@ export function App(): React.JSX.Element {
               title={`${label} (${hintFor(tool)})${ready ? "" : " — G3"}`}
               disabled={!ready}
               onClick={() => {
-                if (controller.isActive()) controller.cancel();
+                if (controller.isActive()) {
+                  releasePointerSession();
+                  controller.cancel();
+                }
                 tools.setTool(tool);
               }}
             >
@@ -734,12 +809,19 @@ export function App(): React.JSX.Element {
             className={spaceHeld || panRef.current !== null ? "panning" : undefined}
             onContextMenu={(e) => e.preventDefault()}
             onPointerDown={(e) => {
+              // This editor has one caret/gesture at a time. Ignoring additional
+              // contacts avoids replacing the only cancellation token and
+              // stranding the first pointer's preview.
+              if (pointerSessionRef.current !== null) return;
               e.currentTarget.setPointerCapture(e.pointerId);
               // Middle button or held Space pans instead of drawing.
               if (e.button === 1 || spaceHeld) {
+                pointerSessionRef.current = { pointerId: e.pointerId, mode: "pan" };
                 panRef.current = { x: e.clientX, y: e.clientY };
+                bump();
                 return;
               }
+              pointerSessionRef.current = { pointerId: e.pointerId, mode: "gesture" };
               controller.onPointerDown(toPointer(e));
             }}
             onPointerMove={(e) => {
@@ -753,11 +835,33 @@ export function App(): React.JSX.Element {
               setHover(controller.hoverCell());
             }}
             onPointerUp={(e) => {
-              if (panRef.current !== null) {
+              const session = pointerSessionRef.current;
+              if (session === null || session.pointerId !== e.pointerId) return;
+              // Clear first: the browser releases capture after pointer-up and
+              // emits lostpointercapture, which is expected and must be a no-op.
+              pointerSessionRef.current = null;
+              if (session.mode === "pan") {
                 panRef.current = null;
+                bump();
                 return;
               }
               controller.onPointerUp(toPointer(e));
+            }}
+            onPointerCancel={(e) => {
+              const session = pointerSessionRef.current;
+              if (session === null || session.pointerId !== e.pointerId) return;
+              pointerSessionRef.current = null;
+              panRef.current = null;
+              if (session.mode === "gesture") controller.cancel();
+              else bump();
+            }}
+            onLostPointerCapture={(e) => {
+              const session = pointerSessionRef.current;
+              if (session === null || session.pointerId !== e.pointerId) return;
+              pointerSessionRef.current = null;
+              panRef.current = null;
+              if (session.mode === "gesture") controller.cancel();
+              else bump();
             }}
             onPointerLeave={() => setHover(null)}
           />
@@ -962,17 +1066,24 @@ export function App(): React.JSX.Element {
             : `sel ${tools.selection.rows}×${tools.selection.cols}`}
         </span>
         <div className="spacer" />
+        {fileStatus.busy && <span>file: {fileStatus.kind}…</span>}
         <button
           type="button"
           disabled={!documentStore.getState().canUndo()}
-          onClick={() => documentStore.getState().undo()}
+          onClick={() => {
+            releasePointerSession();
+            controller.history("undo");
+          }}
         >
           undo
         </button>
         <button
           type="button"
           disabled={!documentStore.getState().canRedo()}
-          onClick={() => documentStore.getState().redo()}
+          onClick={() => {
+            releasePointerSession();
+            controller.history("redo");
+          }}
         >
           redo
         </button>

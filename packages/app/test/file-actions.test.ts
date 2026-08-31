@@ -440,6 +440,75 @@ describe("save", () => {
 });
 
 describe("open", () => {
+  it("keeps one open operation and one picker owner at a time", async () => {
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let reads = 0;
+    const delayed: FileStore = {
+      ...store,
+      async openWithPicker() {
+        reads++;
+        started.resolve();
+        await release.promise;
+        return {
+          content: serialize(docWith("opened once")),
+          handle: { key: "opened.tui", label: "opened.tui", display: "opened.tui" },
+          modifiedAt: clock,
+        };
+      },
+    };
+    const racing = build({ store: delayed });
+    const transitions: string[] = [];
+    const unsubscribe = racing.subscribe((status) => transitions.push(status.kind));
+
+    const first = racing.open();
+    await started.promise;
+    expect(racing.status()).toEqual({ kind: "open", busy: true });
+
+    // Neither call may create a second picker or save beside the open.
+    expect(await racing.open()).toBe(false);
+    expect(await racing.save()).toBe(false);
+    expect(reads).toBe(1);
+
+    release.resolve();
+    expect(await first).toBe(true);
+    expect(toText(state.doc)).toContain("opened once");
+    expect(racing.status()).toEqual({ kind: "idle", busy: false });
+    expect(transitions).toEqual(["open", "idle"]);
+    unsubscribe();
+  });
+
+  it("rejects an open while a save owns the persistence lane", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    state = { ...state, handle, dirty: true };
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let opens = 0;
+    const delayed: FileStore = {
+      ...store,
+      async save(target, content) {
+        started.resolve();
+        await release.promise;
+        return store.save(target, content);
+      },
+      async openWithPicker() {
+        opens++;
+        return store.openWithPicker();
+      },
+    };
+    const racing = build({ store: delayed });
+    const saving = racing.save();
+    await started.promise;
+
+    expect(racing.status().kind).toBe("save");
+    expect(await racing.open()).toBe(false);
+    expect(opens).toBe(0);
+
+    release.resolve();
+    expect(await saving).toBe(true);
+    expect(racing.status().kind).toBe("idle");
+  });
+
   it("loads a document and clears the dirty flag", async () => {
     await store.save(
       { key: "saved.tui", label: "saved.tui", display: "x" },
@@ -582,6 +651,40 @@ describe("open", () => {
 });
 
 describe("autosave", () => {
+  it("coalesces repeated ticks behind one slow recovery write", async () => {
+    edit("slow snapshot");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let writes = 0;
+    let activeWrites = 0;
+    let maxActiveWrites = 0;
+    const delayed: FileStore = {
+      ...store,
+      async writeRecovery(key, content) {
+        writes++;
+        activeWrites++;
+        maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+        started.resolve();
+        await release.promise;
+        await store.writeRecovery(key, content);
+        activeWrites--;
+      },
+    };
+    const racing = build({ store: delayed });
+
+    const first = racing.tick();
+    await started.promise;
+    const second = racing.tick();
+    const third = racing.tick();
+    expect(writes).toBe(1);
+
+    release.resolve();
+    await Promise.all([first, second, third]);
+    expect(writes).toBe(1);
+    expect(maxActiveWrites).toBe(1);
+    expect(await racing.listRecoveries()).toHaveLength(1);
+  });
+
   it("writes a snapshot once an edit has settled", async () => {
     edit("typed something");
     await actions.tick();

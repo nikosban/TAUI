@@ -269,6 +269,25 @@ describe("paste placement", () => {
     expect(past()).toBe(0);
   });
 
+  it("undo cancels an armed paste before undoing the previous edit", () => {
+    seed();
+    useToolStore.getState().setSelection({ top: 1, left: 2, rows: 1, cols: 2 });
+    controller.clipboard("cut");
+    expect(line(1)).toBe("");
+    controller.onPointerMove(pointerAt(4, 10));
+    controller.clipboard("paste");
+    expect(controller.isActive()).toBe(true);
+    expect(scratch).not.toBeNull();
+
+    controller.history("undo");
+
+    expect(controller.isActive()).toBe(false);
+    expect(scratch).toBeNull();
+    expect(dragRect).toBeNull();
+    expect(line(1)).toBe("  AB");
+    expect(line(4)).toBe("");
+  });
+
   it("refuses on a locked layer", () => {
     seed();
     useToolStore.getState().setSelection({ top: 1, left: 2, rows: 1, cols: 2 });

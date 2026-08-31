@@ -49,6 +49,8 @@ export interface GestureController {
   onPointerMove(e: PointerEventLike): void;
   onPointerUp(e: PointerEventLike): void;
   onKey(key: string, mods: Modifiers): void;
+  /** Shared undo/redo command used by both shortcuts and visible controls. */
+  history(action: "undo" | "redo"): void;
   cancel(): void;
   /**
    * Settles every document-relative interaction immediately before another
@@ -267,6 +269,25 @@ export function createGestureController(deps: ControllerDeps): GestureController
     applyEffects(step.effects);
   }
 
+  function runHistoryCommand(action: "undo" | "redo"): void {
+    // A typing burst is a real edit, so land it first. Undo then removes that
+    // burst; redo intentionally sees the redo branch cleared by the new edit.
+    flushTyping("undo-requested");
+
+    // Pointer previews and floating paste placement are transient. They must not
+    // become history merely because undo/redo was invoked while the pointer was
+    // captured.
+    if (state.kind !== "idle") dispatch({ t: "cancel" });
+    textSession = null;
+    deps.setScratch(null);
+    deps.setDragRect(null);
+    deps.setCaret(null);
+
+    const documents = deps.documentStore.getState();
+    if (action === "undo") documents.undo();
+    else documents.redo();
+  }
+
   /** Clamped: dragging off-canvas must extend the gesture, not cancel it. */
   function cellOf(e: PointerEventLike): CellPos {
     const { metrics, viewport, size } = deps.geometry();
@@ -301,6 +322,10 @@ export function createGestureController(deps: ControllerDeps): GestureController
 
     onKey(key, mods) {
       dispatch({ t: "key", key, mods });
+    },
+
+    history(action) {
+      runHistoryCommand(action);
     },
 
     cancel() {
