@@ -15,6 +15,7 @@ import { availableFonts, measureFont, measureProbes } from "./canvas/measure.js"
 import {
   type CellMetrics,
   type CellPos,
+  cellCenter,
   clampViewport,
   type FontSpec,
   type GridSize,
@@ -134,6 +135,10 @@ declare global {
       revision(): number;
       /** The document currently on screen — the scratch during a drag. */
       renderedText(): string;
+      /** Browser-client coordinates for the stable centre of a document cell. */
+      cellCenter(row: number, col: number): { x: number; y: number } | null;
+      /** Runs the real autosave decision/write path without waiting for its poll. */
+      autosave(): Promise<void>;
     };
   }
 }
@@ -517,11 +522,19 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
       present: () => documentStore.getState().history.present,
       revision: () => documentStore.getState().revision,
       renderedText: () => toText(getDoc()),
+      cellCenter: (row, col) => {
+        const canvas = canvasRef.current;
+        if (canvas === null) return null;
+        const point = cellCenter({ row, col }, metrics, viewport, size);
+        const rect = canvas.getBoundingClientRect();
+        return { x: rect.left + point.x, y: rect.top + point.y };
+      },
+      autosave: () => files.tick(),
     };
     return () => {
       delete window.__tui;
     };
-  }, [documentStore, getDoc]);
+  }, [documentStore, files, getDoc, metrics, size, viewport]);
 
   // Global shortcuts, routed through the one registry.
   useEffect(() => {

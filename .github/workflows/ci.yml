@@ -61,6 +61,12 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Install Playwright Chromium
+        run: pnpm --filter @tui-designer/app exec playwright install chromium --with-deps --only-shell
+
+      - name: Run browser smoke tests
+        run: pnpm test:e2e
+
       - name: Enforce core coverage
         run: pnpm test:coverage
 

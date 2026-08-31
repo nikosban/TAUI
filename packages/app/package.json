@@ -8,6 +8,7 @@
     "build": "vite build && tsx scripts/check-production.ts",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:arch": "tsx scripts/check-arch.ts",
@@ -20,6 +21,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.6",

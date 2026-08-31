@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["scripts/*.ts", "test/**/*.test.ts", "test/**/*.test.tsx"],
-  "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts", "test/**/*.{ts,tsx}"],
+  "entry": ["scripts/*.ts", "test/**/*.test.ts", "test/**/*.test.tsx", "e2e/**/*.spec.ts"],
+  "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts", "test/**/*.{ts,tsx}", "e2e/**/*.ts"],
   "vitest": { "config": ["vitest.config.ts"] },
   "vite": { "config": ["vite.config.ts"] }
 }

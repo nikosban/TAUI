@@ -9,5 +9,13 @@
       "@tui-designer/core": ["../core/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "e2e/**/*.ts",
+    "playwright.config.ts",
+    "vite.config.ts"
+  ]
 }

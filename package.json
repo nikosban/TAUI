@@ -9,6 +9,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @tui-designer/app test:e2e",
     "test:coverage": "pnpm --filter @tui-designer/core test --coverage",
     "typecheck": "pnpm -r typecheck",
     "check": "biome check .",
