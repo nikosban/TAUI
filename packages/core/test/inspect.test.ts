@@ -113,6 +113,16 @@ describe("dominant colours", () => {
     expect(inspectRegion(doc, whole(doc)).dominantFg).toEqual(red);
   });
 
+  it("compares ansi256 and RGB colours deterministically", () => {
+    const ansi256 = { kind: "ansi256", index: 208 } as const;
+    const rgb = { kind: "rgb", r: 1, g: 2, b: 3 } as const;
+    let doc = createDocument(2, 1, { idGen: sequentialIdGen() });
+    doc = drawText(doc, "l1", 0, 0, "a", { fg: ansi256, bg: DEFAULT_COLOR });
+    doc = drawText(doc, "l1", 0, 1, "b", { fg: rgb, bg: DEFAULT_COLOR });
+    // First-seen wins a tie, so the result is stable rather than map-order dependent.
+    expect(inspectRegion(doc, whole(doc)).dominantFg).toEqual(ansi256);
+  });
+
   it("reports the most common background", () => {
     let doc = createDocument(6, 1, { idGen: sequentialIdGen() });
     doc = fillRect(

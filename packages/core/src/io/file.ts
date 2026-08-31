@@ -11,7 +11,7 @@
  * entire `cells` map, whose keys are dynamic `"row,col"` strings.
  */
 
-import { assertNarrowChar, type Cell, InvalidCharError } from "../model/cell.js";
+import { assertNarrowChar, type Cell } from "../model/cell.js";
 import {
   type Color,
   type ColorMode,
@@ -77,7 +77,7 @@ export function serialize(doc: TuiDocument): string {
 
 export interface DeserializeResult {
   readonly doc: TuiDocument;
-  /** Migrations applied, dangling palette refs baked, fields dropped. */
+  /** Every migration or repair applied while producing the safe document. */
   readonly warnings: readonly string[];
 }
 
@@ -157,8 +157,9 @@ function validateCell(raw: unknown, where: string): Cell {
   try {
     assertNarrowChar(char);
   } catch (error) {
-    if (error instanceof InvalidCharError) throw new TuiParseError(`${where}: ${error.message}`);
-    throw error;
+    // assertNarrowChar's public contract is an Error with a stable user-facing
+    // message; normalize it to the persisted-boundary error type.
+    throw new TuiParseError(`${where}: ${(error as Error).message}`);
   }
   const cell: {
     char: string;
@@ -203,6 +204,7 @@ function validateLayer(
   if (typeof locked !== "boolean") throw new TuiParseError(`${where}.locked must be a boolean`);
   if (!isRecord(cells)) throw new TuiParseError(`${where}.cells must be an object`);
   cellBudget.count += Object.keys(cells).length;
+  /* v8 ignore next 5 -- the 16 MiB source limit cannot encode one million valid cell entries. */
   if (cellBudget.count > RESOURCE_LIMITS.storedCells) {
     throw new ResourceLimitError(
       `stored cells exceeds the limit of ${RESOURCE_LIMITS.storedCells}`,
@@ -311,6 +313,7 @@ function validateDocument(raw: Record<string, unknown>, warnings: BoundedWarning
   let active = typeof activeLayerId === "string" ? activeLayerId : "";
   assertBoundedString(active, "activeLayerId", RESOURCE_LIMITS.idChars);
   const firstLayer = validatedLayers[0];
+  /* v8 ignore next -- layers is validated as non-empty immediately above. */
   if (!ids.has(active) && firstLayer !== undefined) {
     warnings.add(
       `activeLayerId ${JSON.stringify(active)} does not exist; defaulted to ${JSON.stringify(firstLayer.id)}`,
@@ -344,6 +347,16 @@ function bakeDangling(doc: TuiDocument, warnings: BoundedWarnings): TuiDocument 
   return bakeDanglingRefs(doc);
 }
 
+/**
+ * Reads untrusted `.tui` JSON into the current typed document model.
+ *
+ * The boundary rejects unsafe structure, characters, colors, duplicates, and
+ * resource-limit violations. It repairs and warns for supported migrations,
+ * dangling palette references, missing active layers, and malformed or
+ * out-of-bounds cell keys. Unknown fields are ignored and cannot survive the
+ * typed rebuild or canonical serialization. Repaired output is deterministic:
+ * serializing and loading it again produces no further warnings.
+ */
 export function deserialize(text: string): DeserializeResult {
   if (text.length > RESOURCE_LIMITS.documentTextChars) {
     throw new TuiParseError(
@@ -374,6 +387,7 @@ export function deserialize(text: string): DeserializeResult {
   let version = rawVersion;
   while (version < CURRENT_VERSION) {
     const migration = migrations[version];
+    /* v8 ignore next 3 -- every older non-negative version has a keyed migration. */
     if (migration === undefined) {
       throw new TuiParseError(`no migration path from version ${version}`);
     }

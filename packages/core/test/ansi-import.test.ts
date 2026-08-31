@@ -241,6 +241,7 @@ describe("hostile input never throws", () => {
     ["two-byte escape", "\x1bcx"],
     ["cursor hide/show", "\x1b[?25h\x1b[?25lx"],
     ["scroll region", "\x1b[1;24rx"],
+    ["unsupported erase mode", "a\x1b[3Kb"],
     ["mouse report", "\x1b[<0;10;10Mx"],
     ["sub-parameters", "\x1b[38:2::1:2:3mx"],
     ["bare control chars", "abc\x00\x01\x02"],

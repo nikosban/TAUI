@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { type Color, DEFAULT_COLOR, resolveColor } from "../src/model/color.js";
 import { createDocument, sequentialIdGen, type TuiDocument } from "../src/model/document.js";
+import { RESOURCE_LIMITS, ResourceLimitError } from "../src/model/resource-policy.js";
 import { colorModeLoss, convertColorMode } from "../src/ops/color-mode.js";
 import { drawText, setCell } from "../src/ops/draw.js";
 import {
@@ -70,6 +71,19 @@ describe("addPaletteEntry", () => {
     expect(() => addPaletteEntry(doc, "bad", { kind: "rgb", r: 300, g: 0, b: 0 })).toThrow(
       /r\/g\/b must each be 0-255/u,
     );
+  });
+
+  it("rejects an entry beyond the palette resource limit", () => {
+    const base = createDocument(1, 1, { idGen: sequentialIdGen() });
+    const full: TuiDocument = {
+      ...base,
+      palette: Array.from({ length: RESOURCE_LIMITS.paletteEntries }, (_, index) => ({
+        id: `p${index}`,
+        name: `palette-${index}`,
+        color: DEFAULT_COLOR,
+      })),
+    };
+    expect(() => addPaletteEntry(full, "overflow", DEFAULT_COLOR)).toThrow(ResourceLimitError);
   });
 });
 

@@ -61,6 +61,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Enforce core coverage
+        run: pnpm test:coverage
+
       - name: Typecheck
         run: pnpm typecheck
 

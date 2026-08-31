@@ -8,27 +8,23 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      // The spec mandates 100% of ops/ and render/. history/ is held to the same
-      // bar because it is small, pure, and the GUI's undo correctness rests on it.
-      // The spec mandates ops/ and render/. history/ and the two importers are
-      // held to the same bar deliberately: history/ is what undo correctness
-      // rests on, and a parser's uncovered branch is exactly where a mis-measured
-      // escape sequence hides.
-      //
-      // `io/file.ts` is NOT here yet — its `deserialize` repair paths sit around
-      // 78% branch coverage, and those are the very behaviours the README makes
-      // specific promises about (dangling palette refs baked, activeLayerId
-      // falling back, malformed cell keys dropped, v0 migration). Adding it needs
-      // its own pass rather than a silently lowered threshold.
+      // The spec mandates 100% of ops/ and render/. The persisted-file boundary,
+      // history, importers, handoff, and CLI are held to the same bar: an
+      // uncovered parser or repair branch is exactly where hostile input or a
+      // silent data-loss regression hides.
       include: [
         "src/ops/**",
         "src/render/**",
         "src/history/**",
         "src/io/ansi-import.ts",
+        "src/io/file.ts",
         "src/io/text-import.ts",
         "src/handoff/**",
         "src/bin/**",
       ],
+      // The tiny executable shim is exercised by spawned-process CLI tests;
+      // V8 cannot merge that child process into this worker's coverage map.
+      exclude: ["src/bin/main.ts"],
       thresholds: {
         // The spec requires 100% of ops/ and render/.
         lines: 100,

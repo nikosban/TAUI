@@ -46,6 +46,10 @@ function richDocument(): TuiDocument {
 }
 
 describe("canonical", () => {
+  it("preserves JSON null", () => {
+    expect(canonical(null)).toBeNull();
+  });
+
   it("sorts keys recursively", () => {
     const json = canonical({ b: 1, a: { d: 2, c: 3 } });
     expect(JSON.stringify(json)).toBe('{"a":{"c":3,"d":2},"b":1}');
@@ -159,6 +163,14 @@ describe("deserialize", () => {
     expect(doc.layers[1]?.excludeFromHandoff).toBe(true);
   });
 
+  it("defaults an omitted palette without warning", () => {
+    const raw = JSON.parse(serialize(createDocument(2, 1, { idGen: sequentialIdGen() })));
+    delete raw.palette;
+    const result = deserialize(JSON.stringify(raw));
+    expect(result.doc.palette).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("rejects malformed input with a TuiParseError", () => {
     expect(() => deserialize("not json")).toThrow(/not valid JSON/u);
     expect(() => deserialize("[]")).toThrow(/root must be an object/u);
@@ -194,7 +206,7 @@ describe("deserialize", () => {
     );
   });
 
-  it("repairs an activeLayerId that points at nothing, and warns", () => {
+  it("repairs an activeLayerId that points at nothing and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.activeLayerId = "ghost";
     const result = deserialize(JSON.stringify(doc));
@@ -202,7 +214,15 @@ describe("deserialize", () => {
     expect(result.warnings).toEqual([expect.stringMatching(/does not exist/u)]);
   });
 
-  it("drops malformed cell keys with a warning rather than failing", () => {
+  it("repairs a non-string activeLayerId and warns", () => {
+    const raw = JSON.parse(serialize(richDocument()));
+    raw.activeLayerId = null;
+    const result = deserialize(JSON.stringify(raw));
+    expect(result.doc.activeLayerId).toBe("l1");
+    expect(result.warnings).toEqual([expect.stringMatching(/activeLayerId/u)]);
+  });
+
+  it("repairs malformed cell keys by dropping them and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.layers[0].cells["not-a-key"] = {
       char: "x",
@@ -213,7 +233,7 @@ describe("deserialize", () => {
     expect(result.warnings).toEqual([expect.stringMatching(/malformed cell key/u)]);
   });
 
-  it("drops non-canonical aliases of cell coordinates", () => {
+  it("repairs non-canonical coordinate aliases by dropping them and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.layers[0].cells["00,0"] = doc.layers[0].cells["0,0"];
     const result = deserialize(JSON.stringify(doc));
@@ -234,7 +254,7 @@ describe("deserialize", () => {
     expect(result.warnings.at(-1)).toBe("omitted 5 additional warning(s)");
   });
 
-  it("bakes dangling palette references to the terminal default", () => {
+  it("repairs dangling palette references by baking them and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.palette = []; // every ref is now dangling
     const result = deserialize(JSON.stringify(doc));
@@ -305,7 +325,7 @@ describe("deserialize", () => {
     }
   });
 
-  it("drops all out-of-bounds coordinates before validating their cell payload", () => {
+  it("repairs out-of-bounds coordinates before validating their payload and warns", () => {
     const doc = JSON.parse(serialize(richDocument()));
     doc.layers[0].cells["-1,0"] = { char: "\x1b", fg: {}, bg: {} };
     doc.layers[0].cells["999999999999,0"] = { char: "\x1b", fg: {}, bg: {} };
@@ -356,6 +376,109 @@ describe("deserialize", () => {
     expect(() => deserialize(" ".repeat(RESOURCE_LIMITS.documentTextChars + 1))).toThrow(
       /document text exceeds/u,
     );
+  });
+
+  it("rejects malformed nested field types at the persisted-file boundary", () => {
+    const rejects = (mutate: (raw: ReturnType<typeof JSON.parse>) => void, message: RegExp) => {
+      const raw = JSON.parse(serialize(richDocument()));
+      mutate(raw);
+      expect(() => deserialize(JSON.stringify(raw))).toThrow(message);
+    };
+
+    rejects((raw) => (raw.cols = "10"), /cols and rows must be numbers/u);
+    rejects((raw) => (raw.rows = null), /cols and rows must be numbers/u);
+    rejects((raw) => (raw.layers[0] = null), /layers\[0\] must be an object/u);
+    rejects((raw) => (raw.layers[0].id = ""), /id must be a non-empty string/u);
+    rejects((raw) => (raw.layers[0].id = 1), /id must be a non-empty string/u);
+    rejects((raw) => (raw.layers[0].name = null), /name must be a string/u);
+    rejects((raw) => (raw.layers[0].visible = "yes"), /visible must be a boolean/u);
+    rejects((raw) => (raw.layers[0].locked = 0), /locked must be a boolean/u);
+    rejects((raw) => (raw.layers[0].cells = []), /cells must be an object/u);
+    rejects(
+      (raw) => (raw.layers[0].excludeFromHandoff = "yes"),
+      /excludeFromHandoff must be a boolean/u,
+    );
+    rejects((raw) => (raw.layers[0].cells["0,0"] = null), /cell must be an object/u);
+    rejects((raw) => (raw.layers[0].cells["0,0"].char = 1), /cell.char must be a string/u);
+    rejects((raw) => (raw.layers[0].cells["0,0"].fg = null), /color must be an object/u);
+    rejects(
+      (raw) => (raw.layers[0].cells["0,0"].fg = { kind: "ansi256", index: 1.5 }),
+      /requires an integer index/u,
+    );
+    rejects(
+      (raw) => (raw.layers[0].cells["0,0"].fg = { kind: "rgb", r: 1, g: "2", b: 3 }),
+      /requires integer r\/g\/b/u,
+    );
+    rejects(
+      (raw) => (raw.layers[0].cells["0,0"].fg = { kind: "palette", id: 1 }),
+      /palette ref requires an id/u,
+    );
+    rejects((raw) => (raw.palette = {}), /palette must be an array/u);
+    rejects((raw) => (raw.palette = [null]), /palette\[0\] must be an object/u);
+    rejects((raw) => (raw.palette[0].id = ""), /id must be a non-empty string/u);
+    rejects((raw) => (raw.palette[0].id = 1), /id must be a non-empty string/u);
+    rejects((raw) => (raw.palette[0].name = null), /name must be a string/u);
+  });
+
+  it("rejects unsafe integers and accepts exact string limits", () => {
+    const unsafeCols = JSON.parse(serialize(richDocument()));
+    unsafeCols.cols = Number.MAX_SAFE_INTEGER + 1;
+    expect(() => deserialize(JSON.stringify(unsafeCols))).toThrow(/positive integer/u);
+
+    const unsafeRows = JSON.parse(serialize(richDocument()));
+    unsafeRows.rows = Number.MAX_SAFE_INTEGER + 1;
+    expect(() => deserialize(JSON.stringify(unsafeRows))).toThrow(/positive integer/u);
+
+    const raw = JSON.parse(serialize(richDocument()));
+    const layerId = "l".repeat(RESOURCE_LIMITS.idChars);
+    const paletteId = "p".repeat(RESOURCE_LIMITS.idChars);
+    raw.layers[0].id = layerId;
+    raw.layers[0].name = "n".repeat(RESOURCE_LIMITS.nameChars);
+    raw.activeLayerId = layerId;
+    raw.palette.push({
+      id: paletteId,
+      name: "p".repeat(RESOURCE_LIMITS.nameChars),
+      color: { kind: "default" },
+    });
+    raw.layers[0].cells["0,0"].bg = { kind: "palette", id: paletteId };
+    expect(deserialize(JSON.stringify(raw)).warnings).toEqual([]);
+  });
+
+  it("ignores unknown fields without preserving executable or ambiguous data", () => {
+    const raw = JSON.parse(serialize(richDocument()));
+    raw.futureRoot = { command: "run-me" };
+    raw.layers[0].futureLayer = true;
+    raw.layers[0].cells["0,0"].futureCell = "ignored";
+    raw.layers[0].cells["0,0"].fg.futureColor = 123;
+    raw.palette[0].futurePaletteEntry = ["ignored"];
+
+    const result = deserialize(JSON.stringify(raw));
+    const canonicalText = serialize(result.doc);
+    expect(result.warnings).toEqual([]);
+    expect(canonicalText).not.toMatch(
+      /futureRoot|futureLayer|futureCell|futureColor|futurePalette/u,
+    );
+  });
+
+  it("repairs all recoverable corruption with warnings and serializes deterministically", () => {
+    const raw = JSON.parse(serialize(richDocument()));
+    raw.activeLayerId = "missing";
+    raw.palette = [];
+    raw.layers[0].cells["not-a-key"] = { char: "x", ...STYLE };
+    raw.layers[0].cells["99,99"] = { char: "x", ...STYLE };
+
+    const repaired = deserialize(JSON.stringify(raw));
+    expect(repaired.warnings).toEqual([
+      expect.stringMatching(/malformed cell key/u),
+      expect.stringMatching(/out-of-bounds cell key/u),
+      expect.stringMatching(/activeLayerId/u),
+      expect.stringMatching(/dangling palette/u),
+    ]);
+
+    const once = serialize(repaired.doc);
+    const cleanReload = deserialize(once);
+    expect(cleanReload.warnings).toEqual([]);
+    expect(serialize(cleanReload.doc)).toBe(once);
   });
 
   it("guards serialization of unsafe hand-constructed documents", () => {
@@ -415,6 +538,15 @@ describe("migrations", () => {
     expect(doc.colorMode).toBe("ansi256"); // absent in v0
     expect(doc.palette).toEqual([]); // absent in v0
     expect(warnings).toEqual(["migrated document from v0 to v1"]);
+  });
+
+  it("preserves valid fields already present on a v0 document", () => {
+    const raw = JSON.parse(V0_LEGACY);
+    raw.colorMode = "rgb";
+    raw.palette = [{ id: "legacy", name: "legacy", color: { kind: "default" } }];
+    const { doc } = deserialize(JSON.stringify(raw));
+    expect(doc.colorMode).toBe("rgb");
+    expect(doc.palette).toEqual(raw.palette);
   });
 
   it("preserves v0 cell content through the migration", () => {
