@@ -106,4 +106,84 @@ describe("createFileStore", () => {
       expect(createFileStore({ picker }).capabilities.persistent).toBe(true);
     });
   });
+
+  it("falls back to memory after an advertised OPFS root rejects", async () => {
+    const fallback: string[] = [];
+    const statuses: unknown[] = [];
+    setGlobals({
+      navigator: {
+        storage: { getDirectory: () => Promise.reject(new Error("private mode blocked it")) },
+      },
+      FileSystemDirectoryHandle: class {},
+    });
+
+    const store = createFileStore({
+      picker: async () => "fallback.tui",
+      onFallback: (message) => fallback.push(message),
+      onStorageStatus: (status) => statuses.push(status),
+    });
+    expect(store.kind).toBe("opfs");
+
+    await expect(store.saveAs("safe", "fallback.tui")).resolves.toMatchObject({
+      handle: { key: "fallback.tui" },
+    });
+    await Promise.resolve();
+
+    expect(store.kind).toBe("memory");
+    expect(store.capabilities.persistent).toBe(false);
+    expect(fallback).toEqual([
+      "Browser storage is unavailable; this session will not survive a reload (private mode blocked it).",
+    ]);
+    expect(statuses).toEqual([
+      { backend: "memory", persistence: "unavailable", usage: null, quota: null },
+    ]);
+  });
+
+  it("requests persistence and reports a finite quota after the root probe", async () => {
+    const statuses: unknown[] = [];
+    let persistCalls = 0;
+    setGlobals({
+      navigator: {
+        storage: {
+          getDirectory: () => Promise.resolve({}),
+          persist: async () => {
+            persistCalls += 1;
+            return false;
+          },
+          estimate: async () => ({ usage: 1_024, quota: 8_192 }),
+        },
+      },
+      FileSystemDirectoryHandle: class {},
+    });
+
+    createFileStore({ picker, onStorageStatus: (status) => statuses.push(status) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(persistCalls).toBe(1);
+    expect(statuses).toEqual([
+      { backend: "opfs", persistence: "not-granted", usage: 1_024, quota: 8_192 },
+    ]);
+  });
+
+  it("keeps working OPFS when persistence and estimate APIs reject", async () => {
+    const statuses: unknown[] = [];
+    setGlobals({
+      navigator: {
+        storage: {
+          getDirectory: () => Promise.resolve({}),
+          persist: () => Promise.reject(new Error("not allowed")),
+          estimate: () => Promise.reject(new Error("hidden")),
+        },
+      },
+      FileSystemDirectoryHandle: class {},
+    });
+
+    const store = createFileStore({ picker, onStorageStatus: (status) => statuses.push(status) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.kind).toBe("opfs");
+    expect(statuses).toEqual([
+      { backend: "opfs", persistence: "unavailable", usage: null, quota: null },
+    ]);
+  });
 });

@@ -21,6 +21,7 @@
  * precisely because the thing being defended against is a crash.
  */
 
+import { safeDocumentFilename } from "../safe-filename.js";
 import {
   type Clock,
   type DocHandle,
@@ -54,12 +55,9 @@ export interface OpfsFileStore extends FileStore {
 
 const handleFor = (name: string): DocHandle => ({
   key: name,
-  label: name,
-  display: `${name} (browser storage)`,
+  label: safeDocumentFilename(name),
+  display: `${safeDocumentFilename(name)} (browser storage)`,
 });
-
-/** Ensures `.tui`, so a name typed without it still lands somewhere sensible. */
-const withExtension = (name: string): string => (name.endsWith(".tui") ? name : `${name}.tui`);
 
 /** Wraps a native failure, mapping the codes worth distinguishing. */
 function wrap(error: unknown, fallback: string): FileStoreError {
@@ -141,11 +139,13 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
       if (!Array.isArray(parsed)) return [];
       // Hand-editable storage: keep only entries that still look right rather than
       // throwing, since a corrupt recent list must never block opening a document.
-      return parsed.filter(
-        (entry): entry is RecentEntry =>
-          typeof (entry as RecentEntry)?.handle?.key === "string" &&
-          typeof (entry as RecentEntry)?.openedAt === "number",
-      );
+      return parsed
+        .filter(
+          (entry): entry is RecentEntry =>
+            typeof (entry as RecentEntry)?.handle?.key === "string" &&
+            typeof (entry as RecentEntry)?.openedAt === "number",
+        )
+        .map((entry) => ({ ...entry, handle: handleFor(entry.handle.key) }));
     } catch {
       return [];
     }
@@ -166,7 +166,7 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
       const names = await listDocNames();
       const choice = await opts.picker(names.map(handleFor), "open");
       if (choice === null) throw new FileStoreError("cancelled", "open cancelled");
-      const key = typeof choice === "string" ? withExtension(choice) : choice.key;
+      const key = typeof choice === "string" ? safeDocumentFilename(choice) : choice.key;
       return store.openHandle(handleFor(key));
     },
 
@@ -177,7 +177,7 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
           handle.key,
           MAX_DOCUMENT_BYTES,
         );
-        return { handle, content: text, modifiedAt } satisfies OpenResult;
+        return { handle: handleFor(handle.key), content: text, modifiedAt } satisfies OpenResult;
       } catch (error) {
         throw wrap(error, `cannot open ${handle.label}`);
       }
@@ -195,9 +195,13 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async saveAs(content, suggestedName) {
       const names = await listDocNames();
-      const choice = await opts.picker(names.map(handleFor), "save", suggestedName);
+      const choice = await opts.picker(
+        names.map(handleFor),
+        "save",
+        safeDocumentFilename(suggestedName),
+      );
       if (choice === null) throw new FileStoreError("cancelled", "save cancelled");
-      const key = withExtension(typeof choice === "string" ? choice : choice.key);
+      const key = typeof choice === "string" ? safeDocumentFilename(choice) : choice.key;
       const handle = handleFor(key);
       const { modifiedAt } = await store.save(handle, content);
       return { handle, modifiedAt };
@@ -301,7 +305,7 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async pushRecent(handle) {
       const entries = (await readRecent()).filter((e) => e.handle.key !== handle.key);
-      entries.unshift({ handle, openedAt: now() });
+      entries.unshift({ handle: handleFor(handle.key), openedAt: now() });
       try {
         await writeText(
           await dir(META_DIR),

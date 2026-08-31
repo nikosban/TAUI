@@ -56,6 +56,17 @@ describe("open and save", () => {
     expect(result.content).toBe("content-b");
   });
 
+  it("keeps legacy keys opaque but never exposes control or bidi text in labels", async () => {
+    const key = "legacy\u202Egnp.tui";
+    const legacy = createMemoryFileStore({ now, initial: { [key]: "body" } });
+    const opened = await legacy.openHandle({ key, label: key, display: key });
+    expect(opened.handle.key).toBe(key);
+    expect(opened.handle.label).toBe("legacygnp.tui");
+    expect(opened.handle.display).not.toContain("\u202E");
+    await legacy.pushRecent({ key, label: key, display: key });
+    expect((await legacy.listRecent())[0]?.handle.label).toBe("legacygnp.tui");
+  });
+
   it("saves over an existing handle and advances the mtime", async () => {
     const before = (await store.openHandle({ key: "a.tui", label: "a", display: "a" })).modifiedAt;
     const { modifiedAt } = await store.save({ key: "a.tui", label: "a", display: "a" }, "updated");
@@ -68,6 +79,21 @@ describe("open and save", () => {
     const { handle } = await fresh.saveAs("hello", "untitled.tui");
     expect(handle.key).toBe("new.tui");
     expect(fresh.snapshot()).toEqual({ "new.tui": "hello" });
+  });
+
+  it("applies the canonical safe document name to picker strings", async () => {
+    let suggested = "";
+    const safe = createMemoryFileStore({
+      now,
+      picker: async (_entries, _mode, name) => {
+        suggested = name ?? "";
+        return "../report\u202Egnp";
+      },
+    });
+    const { handle } = await safe.saveAs("body", "draft");
+    expect(suggested).toBe("draft.tui");
+    expect(handle.key).toBe("-reportgnp.tui");
+    expect(safe.snapshot()).toEqual({ "-reportgnp.tui": "body" });
   });
 
   it("accepts a DocHandle from the picker, not just a name", async () => {

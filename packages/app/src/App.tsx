@@ -30,12 +30,13 @@ import { createReplacementPolicy } from "./files/replacement-policy.js";
 import { createGestureController, type PointerEventLike } from "./gestures/controller.js";
 import type { Modifiers, ToolId } from "./gestures/gesture.js";
 import { InspectorPanel } from "./inspect/InspectorPanel.js";
+import { parseLaunchConfig } from "./launch-config.js";
 import { LayersPanel } from "./layers/LayersPanel.js";
 import { activeLayerNotice, cycleActiveId } from "./layers/panel-model.js";
 import { PalettePanel } from "./palette/PalettePanel.js";
 import { createFileActions } from "./ports/file-actions.js";
 import type { RecoveryInfo } from "./ports/file-store.js";
-import { createFileStore } from "./ports/index.js";
+import { type BrowserStorageStatus, createFileStore } from "./ports/index.js";
 import { matchShortcut, SHORTCUTS, shortcutHint } from "./shortcuts.js";
 import { createDocumentStore } from "./stores/document-store.js";
 import { usePrefsStore } from "./stores/prefs-store.js";
@@ -46,10 +47,8 @@ import { TEMPLATES, templateById } from "./templates.js";
  * URL parameters, so a headless browser can drive the app for visual checks:
  * `?template=form&font=Monaco&size=20&lh=1.2&zoom=2&grid=0&tool=box`.
  */
-const params = new URLSearchParams(window.location.search);
-const documentStore = createDocumentStore(
-  templateById(params.get("template") ?? "dashboard").build(),
-);
+const launchConfig = parseLaunchConfig(typeof window === "undefined" ? "" : window.location.search);
+const documentStore = createDocumentStore(templateById(launchConfig.template).build());
 
 /** Test hook. Visual assertions become string assertions. */
 declare global {
@@ -91,6 +90,12 @@ const hintFor = (tool: ToolId): string => {
   return found === undefined ? "" : shortcutHint(found);
 };
 
+const storageUsage = (status: BrowserStorageStatus): string => {
+  if (status.usage === null || status.quota === null) return "";
+  const megabytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return ` · ${megabytes(status.usage)} / ${megabytes(status.quota)}`;
+};
+
 export function App(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -130,7 +135,7 @@ export function App(): React.JSX.Element {
   const [dragRect, setDragRect] = useState<Rect | null>(null);
   const [caret, setCaret] = useState<CellPos | null>(null);
   const [anchor, setAnchor] = useState<"top-left" | "center">("top-left");
-  const [templateId, setTemplateId] = useState(params.get("template") ?? "dashboard");
+  const [templateId, setTemplateId] = useState(launchConfig.template);
 
   /**
    * True while the keyboard belongs to the text tool rather than to shortcuts.
@@ -158,18 +163,12 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const store = usePrefsStore.getState();
-    const font = params.get("font");
-    const sizeParam = params.get("size");
-    const lh = params.get("lh");
-    const zoom = params.get("zoom");
-    const grid = params.get("grid");
-    const tool = params.get("tool");
-    if (font !== null) store.setFont(font);
-    if (sizeParam !== null) store.setFontSize(Number(sizeParam));
-    if (lh !== null) store.setLineHeightFactor(Number(lh));
-    if (zoom !== null) store.setZoom(Number(zoom));
-    if (grid !== null) store.setShowGrid(grid !== "0");
-    if (tool !== null) useToolStore.getState().setTool(tool as ToolId);
+    store.setFont(launchConfig.font);
+    store.setFontSize(launchConfig.fontSize);
+    store.setLineHeightFactor(launchConfig.lineHeightFactor);
+    store.setZoom(launchConfig.zoom);
+    store.setShowGrid(launchConfig.showGrid);
+    useToolStore.getState().setTool(launchConfig.tool);
   }, []);
 
   const font: FontSpec = useMemo(
@@ -291,6 +290,7 @@ export function App(): React.JSX.Element {
   const noticeSeq = useRef(0);
   const [recoveries, setRecoveries] = useState<readonly RecoveryInfo[] | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus | null>(null);
 
   const notify = useCallback((message: string) => {
     // Newest last, and capped: a burst of deserialize warnings should not push the
@@ -304,9 +304,11 @@ export function App(): React.JSX.Element {
     () =>
       createFileStore({
         picker,
-        ...(params.get("store") === "memory" ? { prefer: "memory" as const } : {}),
+        ...(launchConfig.store === "auto" ? {} : { prefer: launchConfig.store }),
+        onFallback: notify,
+        onStorageStatus: setStorageStatus,
       }),
-    [picker],
+    [notify, picker],
   );
 
   /**
@@ -1114,6 +1116,19 @@ export function App(): React.JSX.Element {
             title="This browser has no usable storage; nothing will survive a reload."
           >
             not persistent
+          </span>
+        )}
+        {store.capabilities.persistent && storageStatus?.backend === "opfs" && (
+          <span
+            className={storageStatus.persistence === "granted" ? "muted" : "warn"}
+            title={
+              storageStatus.persistence === "granted"
+                ? "Browser storage persistence is granted."
+                : "The browser may evict this origin's documents when storage is constrained."
+            }
+          >
+            {storageStatus.persistence === "granted" ? "persistent" : "eviction possible"}
+            {storageUsage(storageStatus)}
           </span>
         )}
       </footer>

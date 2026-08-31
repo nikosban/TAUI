@@ -77,6 +77,11 @@ describe("exportFilename", () => {
   it("leaves an interior .tui alone", () => {
     expect(exportFilename("my.tui.backup", "svg")).toBe("my.tui.backup.svg");
   });
+
+  it("uses the canonical safe-name policy for downloads", () => {
+    expect(exportFilename("../safe\u202Egnp.tui", "png")).toBe("-safegnp.png");
+    expect([...exportFilename("😀".repeat(200), "svg")]).toHaveLength(120);
+  });
 });
 
 describe("format metadata", () => {

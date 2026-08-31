@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { DocHandle, PickerFn, RecoveryInfo } from "../ports/file-store.js";
+import { filenameProblem } from "../safe-filename.js";
 
 export interface PickerRequest {
   readonly entries: readonly DocHandle[];
@@ -90,6 +91,7 @@ export function usePicker(): { picker: PickerFn; request: PickerRequest | null }
 export function PickerDialog({ request }: { request: PickerRequest }): React.JSX.Element {
   const [name, setName] = useState(request.suggestedName);
   const saving = request.mode === "save";
+  const nameError = saving ? filenameProblem(name) : null;
 
   return (
     <div className="modal-backdrop">
@@ -110,11 +112,12 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && name.trim() !== "") request.resolve(name.trim());
+                if (e.key === "Enter" && nameError === null) request.resolve(name.trim());
                 if (e.key === "Escape") request.resolve(null);
                 e.stopPropagation();
               }}
             />
+            {nameError !== null && <span className="warn small">{nameError}</span>}
           </label>
         )}
 
@@ -146,7 +149,7 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
             <button
               type="button"
               className="chip active"
-              disabled={name.trim() === ""}
+              disabled={nameError !== null}
               onClick={() => request.resolve(name.trim())}
             >
               Save

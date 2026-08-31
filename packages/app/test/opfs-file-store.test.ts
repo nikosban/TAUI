@@ -185,6 +185,17 @@ describe("save and open", () => {
     const second = await store.save(handle("a.tui"), "v2");
     expect(second.modifiedAt).toBeGreaterThan(first.modifiedAt ?? 0);
   });
+
+  it("keeps legacy keys opaque but never exposes control or bidi text in labels", async () => {
+    const key = "legacy\u202Egnp.tui";
+    await store.save(handle(key), "body");
+    const opened = await store.openHandle(handle(key));
+    expect(opened.handle.key).toBe(key);
+    expect(opened.handle.label).toBe("legacygnp.tui");
+    expect(opened.handle.display).not.toContain("\u202E");
+    await store.pushRecent(handle(key));
+    expect((await store.listRecent())[0]?.handle.label).toBe("legacygnp.tui");
+  });
 });
 
 describe("the picker", () => {
@@ -234,6 +245,18 @@ describe("the picker", () => {
   it("keeps a name that already ends in .tui", async () => {
     const saving = makeStore(pickerFor("named.tui"));
     expect((await saving.saveAs("body", "s.tui")).handle.key).toBe("named.tui");
+  });
+
+  it("applies the canonical safe document name before touching OPFS", async () => {
+    let suggested = "";
+    const safe = makeStore(async (_entries, _mode, name) => {
+      suggested = name ?? "";
+      return "../report\u202Egnp";
+    });
+    const { handle: created } = await safe.saveAs("body", "draft");
+    expect(suggested).toBe("draft.tui");
+    expect(created.key).toBe("-reportgnp.tui");
+    expect((await safe.openHandle(created)).content).toBe("body");
   });
 });
 

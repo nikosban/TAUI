@@ -36,7 +36,7 @@ export interface PrefsState {
   applyCoverage(coverage: GlyphCoverage): void;
 }
 
-const DEFAULT_PREFS = {
+export const DEFAULT_PREFS = {
   // Menlo is the only installed font that passes both coverage checks on macOS;
   // `monospace` resolves to it. See spike/g0-metrics/FINDINGS.md.
   previewFont: "Menlo",
@@ -46,10 +46,14 @@ const DEFAULT_PREFS = {
   zoom: 1,
 } as const;
 
-const FONT_SIZE_MIN = 8;
-const FONT_SIZE_MAX = 40;
+export const FONT_SIZE_MIN = 8;
+export const FONT_SIZE_MAX = 40;
+export const LINE_HEIGHT_MIN = 1;
+export const LINE_HEIGHT_MAX = 3;
 
 const clampSize = (n: number): number => Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, n));
+const clampLineHeightRequest = (n: number): number =>
+  Math.max(LINE_HEIGHT_MIN, Math.min(LINE_HEIGHT_MAX, n));
 
 export const usePrefsStore = create<PrefsState>((set, get) => ({
   previewFont: DEFAULT_PREFS.previewFont,
@@ -65,19 +69,23 @@ export const usePrefsStore = create<PrefsState>((set, get) => ({
     set({ previewFont: family, coverage: null });
   },
   setFontSize(sizePx) {
+    if (!Number.isFinite(sizePx)) return;
     set({ fontSize: clampSize(sizePx), coverage: null });
   },
   setLineHeightFactor(factor) {
+    if (!Number.isFinite(factor)) return;
+    const request = clampLineHeightRequest(factor);
     const coverage = get().coverage;
     set({
-      requestedLineHeightFactor: factor,
-      lineHeightFactor: coverage === null ? factor : clampLineHeightFactor(factor, coverage),
+      requestedLineHeightFactor: request,
+      lineHeightFactor: coverage === null ? request : clampLineHeightFactor(request, coverage),
     });
   },
   setShowGrid(show) {
     set({ showGrid: show });
   },
   setZoom(zoom) {
+    if (!Number.isFinite(zoom)) return;
     set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)) });
   },
   zoomIn() {

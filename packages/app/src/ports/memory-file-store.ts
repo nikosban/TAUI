@@ -7,6 +7,7 @@
  * that starts from a known-empty state).
  */
 
+import { safeDocumentFilename } from "../safe-filename.js";
 import {
   type Clock,
   type DocHandle,
@@ -48,8 +49,8 @@ export interface MemoryFileStore extends FileStore {
 
 const handleFor = (key: string): DocHandle => ({
   key,
-  label: key,
-  display: `${key} (in memory)`,
+  label: safeDocumentFilename(key),
+  display: `${safeDocumentFilename(key)} (in memory)`,
 });
 
 export function createMemoryFileStore(opts: MemoryFileStoreOptions = {}): MemoryFileStore {
@@ -85,14 +86,18 @@ export function createMemoryFileStore(opts: MemoryFileStoreOptions = {}): Memory
     async openWithPicker(): Promise<OpenResult> {
       const chosen = await requirePicker()([...docs.keys()].map(handleFor), "open");
       if (chosen === null) throw new FileStoreError("cancelled", "open cancelled");
-      const key = typeof chosen === "string" ? chosen : chosen.key;
+      const key = typeof chosen === "string" ? safeDocumentFilename(chosen) : chosen.key;
       const entry = read(key);
       return { handle: handleFor(key), content: entry.content, modifiedAt: entry.modifiedAt };
     },
 
     async openHandle(handle) {
       const entry = read(handle.key);
-      return { handle, content: entry.content, modifiedAt: entry.modifiedAt };
+      return {
+        handle: handleFor(handle.key),
+        content: entry.content,
+        modifiedAt: entry.modifiedAt,
+      };
     },
 
     async save(handle, content) {
@@ -102,9 +107,13 @@ export function createMemoryFileStore(opts: MemoryFileStoreOptions = {}): Memory
     },
 
     async saveAs(content, suggestedName) {
-      const chosen = await requirePicker()([...docs.keys()].map(handleFor), "save", suggestedName);
+      const chosen = await requirePicker()(
+        [...docs.keys()].map(handleFor),
+        "save",
+        safeDocumentFilename(suggestedName),
+      );
       if (chosen === null) throw new FileStoreError("cancelled", "save cancelled");
-      const key = typeof chosen === "string" ? chosen : chosen.key;
+      const key = typeof chosen === "string" ? safeDocumentFilename(chosen) : chosen.key;
       const modifiedAt = now();
       docs.set(key, { content, modifiedAt });
       return { handle: handleFor(key), modifiedAt };
@@ -161,7 +170,7 @@ export function createMemoryFileStore(opts: MemoryFileStoreOptions = {}): Memory
     async pushRecent(handle) {
       const existing = recent.findIndex((r) => r.handle.key === handle.key);
       if (existing !== -1) recent.splice(existing, 1);
-      recent.push({ handle, openedAt: now() });
+      recent.push({ handle: handleFor(handle.key), openedAt: now() });
     },
 
     snapshot() {

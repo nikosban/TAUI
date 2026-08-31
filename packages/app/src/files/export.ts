@@ -16,6 +16,7 @@ import type { CellMetrics, GridSize, Viewport } from "../canvas/metrics.js";
 import type { Theme } from "../canvas/paint-plan.js";
 import { buildPaintPlan } from "../canvas/paint-plan.js";
 import { createRenderer } from "../canvas/renderer.js";
+import { safeFilename } from "../safe-filename.js";
 
 /**
  * A conservative cross-browser ceiling for a temporary PNG backing store.
@@ -77,10 +78,8 @@ export const formatInfo = (format: ExportFormat): FormatInfo =>
  * `mockup.svg` and not `mockup.tui.svg`.
  */
 export function exportFilename(documentLabel: string | null, format: ExportFormat): string {
-  const base = (documentLabel ?? "untitled").replace(/\.tui$/u, "");
-  // A name that was nothing but ".tui" would leave an empty base.
-  const stem = base === "" ? "untitled" : base;
-  return `${stem}.${formatInfo(format).extension}`;
+  const base = (documentLabel ?? "untitled").replace(/\.tui$/iu, "");
+  return safeFilename(base, formatInfo(format).extension);
 }
 
 /** The three text formats. PNG is not a string, so it is not here. */
