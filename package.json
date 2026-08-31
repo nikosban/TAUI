@@ -2,16 +2,18 @@
   "name": "tui-designer",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.30.2",
+  "packageManager": "pnpm@11.19.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "check": "biome check .",
-    "check:fix": "biome check --write ."
+    "check:fix": "biome check --write .",
+    "audit": "pnpm audit --audit-level=low --ignore-registry-errors",
+    "audit:signatures": "pnpm audit signatures"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",

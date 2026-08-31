@@ -1,6 +1,21 @@
 packages:
   - "packages/*"
 
-# esbuild ships a platform-specific binary and needs its postinstall to run.
-onlyBuiltDependencies:
-  - esbuild
+# GHSA-g7r4-m6w7-qqqr is fixed in esbuild 0.28.1. tsup 8.5.1 still
+# requests ^0.27.0, but bundle-require supports esbuild >=0.18 and the full
+# package/build suite validates this compatible resolution.
+overrides:
+  "esbuild@<0.28.1": 0.28.2
+
+# Dependency lifecycle scripts are denied unless this exact reviewed version is
+# listed. strictDepBuilds turns an unexpected script into an install failure.
+allowBuilds:
+  esbuild@0.28.2: true
+strictDepBuilds: true
+
+# Hold new releases for a day, reject trust downgrades during their first week,
+# and prevent transitive dependencies from introducing git/tarball sources.
+minimumReleaseAge: 1440
+trustPolicy: no-downgrade
+trustPolicyIgnoreAfter: 10080
+blockExoticSubdeps: true
