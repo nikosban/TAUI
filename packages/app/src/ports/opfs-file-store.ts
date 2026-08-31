@@ -31,8 +31,12 @@ import {
   type OpenResult,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
+  RECOVERY_STARTUP_BYTES,
+  RECOVERY_TOTAL_BYTES,
+  RECOVERY_TOTAL_LIMIT,
   type RecentEntry,
   type RecoveryInfo,
+  type SavePickerChoice,
 } from "./file-store.js";
 
 const DOCS_DIR = "docs";
@@ -40,6 +44,7 @@ const RECOVERY_DIR = "recovery";
 const META_DIR = "meta";
 const RECENT_FILE = "recent.json";
 const RECENT_LIMIT = 12;
+const RECOVERY_FILE = /^(\d{6})\.json$/u;
 
 export interface OpfsFileStoreOptions {
   /** Chooses a document; OPFS has no native dialog. */
@@ -58,6 +63,11 @@ const handleFor = (name: string): DocHandle => ({
   label: safeDocumentFilename(name),
   display: `${safeDocumentFilename(name)} (browser storage)`,
 });
+
+const isSavePickerChoice = (
+  choice: DocHandle | string | SavePickerChoice,
+): choice is SavePickerChoice =>
+  typeof choice === "object" && choice !== null && "overwrite" in choice && "handle" in choice;
 
 /** Wraps a native failure, mapping the codes worth distinguishing. */
 function wrap(error: unknown, fallback: string): FileStoreError {
@@ -79,13 +89,29 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
     opts.root ?? (() => navigator.storage.getDirectory() as Promise<FileSystemDirectoryHandle>);
   /* c8 ignore stop */
 
-  /** A subdirectory of the root, created on demand. */
-  const dir = async (...path: string[]): Promise<FileSystemDirectoryHandle> => {
+  /** Serializes the compare-and-write window across tabs when Web Locks exists. */
+  const withDocumentLock = async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const locks = globalThis.navigator?.locks;
+    if (locks === undefined) return work();
+    return locks.request(`taui:opfs:${key}`, work);
+  };
+
+  /** A subdirectory of the root, optionally created for a write path. */
+  const dir = async (create: boolean, ...path: string[]): Promise<FileSystemDirectoryHandle> => {
     let current = await getRoot();
     for (const segment of path) {
-      current = await current.getDirectoryHandle(segment, { create: true });
+      current = await current.getDirectoryHandle(segment, { create });
     }
     return current;
+  };
+
+  const existingDir = async (...path: string[]): Promise<FileSystemDirectoryHandle | null> => {
+    try {
+      return await dir(false, ...path);
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name === "NotFoundError") return null;
+      throw error;
+    }
   };
 
   const readText = async (
@@ -116,8 +142,17 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
   ): Promise<void> => {
     const fileHandle = await directory.getFileHandle(name, { create: true });
     const writable = await fileHandle.createWritable();
-    await writable.write(content);
-    await writable.close();
+    try {
+      await writable.write(content);
+      await writable.close();
+    } catch (error) {
+      try {
+        await writable.abort(error);
+      } catch {
+        // Preserve the write failure; abort is best-effort cleanup.
+      }
+      throw error;
+    }
   };
 
   /** Entry names in a directory. Empty when the directory does not exist. */
@@ -128,13 +163,17 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
   };
 
   const listDocNames = async (): Promise<string[]> => {
-    const names = await namesIn(await dir(DOCS_DIR));
+    const docs = await existingDir(DOCS_DIR);
+    if (docs === null) return [];
+    const names = await namesIn(docs);
     return names.sort((a, b) => a.localeCompare(b));
   };
 
   const readRecent = async (): Promise<RecentEntry[]> => {
     try {
-      const { text } = await readText(await dir(META_DIR), RECENT_FILE);
+      const meta = await existingDir(META_DIR);
+      if (meta === null) return [];
+      const { text } = await readText(meta, RECENT_FILE);
       const parsed: unknown = JSON.parse(text);
       if (!Array.isArray(parsed)) return [];
       // Hand-editable storage: keep only entries that still look right rather than
@@ -152,7 +191,50 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
   };
 
   /** The document's snapshot directory. Names are zero-padded so they sort. */
-  const recoveryDirFor = (key: string) => dir(RECOVERY_DIR, key);
+  const recoveryDirFor = (key: string, create: boolean) => dir(create, RECOVERY_DIR, key);
+
+  const recoveryNames = async (directory: FileSystemDirectoryHandle): Promise<string[]> =>
+    (await namesIn(directory)).filter((name) => RECOVERY_FILE.test(name)).sort();
+
+  interface StoredRecovery {
+    readonly directory: FileSystemDirectoryHandle;
+    readonly key: string;
+    readonly name: string;
+    readonly size: number;
+    readonly modifiedAt: number;
+  }
+
+  const storedRecoveries = async (parent: FileSystemDirectoryHandle): Promise<StoredRecovery[]> => {
+    const found: StoredRecovery[] = [];
+    for await (const [key, entry] of parent.entries()) {
+      if (entry.kind !== "directory") continue;
+      const directory = entry as FileSystemDirectoryHandle;
+      for (const name of await recoveryNames(directory)) {
+        try {
+          const file = await (await directory.getFileHandle(name)).getFile();
+          found.push({ directory, key, name, size: file.size, modifiedAt: file.lastModified });
+        } catch {
+          // It may have been removed by another tab between enumeration and stat.
+        }
+      }
+    }
+    return found;
+  };
+
+  const pruneStoredRecoveries = async (): Promise<void> => {
+    const parent = await existingDir(RECOVERY_DIR);
+    if (parent === null) return;
+    const found = (await storedRecoveries(parent)).sort(
+      (a, b) => a.modifiedAt - b.modifiedAt || a.name.localeCompare(b.name),
+    );
+    let bytes = found.reduce((sum, item) => sum + item.size, 0);
+    while (found.length > RECOVERY_TOTAL_LIMIT || bytes > RECOVERY_TOTAL_BYTES) {
+      const oldest = found.shift();
+      if (oldest === undefined) break;
+      await oldest.directory.removeEntry(oldest.name);
+      bytes -= oldest.size;
+    }
+  };
 
   const store: OpfsFileStore = {
     kind: "opfs",
@@ -166,14 +248,15 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
       const names = await listDocNames();
       const choice = await opts.picker(names.map(handleFor), "open");
       if (choice === null) throw new FileStoreError("cancelled", "open cancelled");
-      const key = typeof choice === "string" ? safeDocumentFilename(choice) : choice.key;
+      const target = isSavePickerChoice(choice) ? choice.handle : choice;
+      const key = typeof target === "string" ? safeDocumentFilename(target) : target.key;
       return store.openHandle(handleFor(key));
     },
 
     async openHandle(handle) {
       try {
         const { text, modifiedAt } = await readText(
-          await dir(DOCS_DIR),
+          await dir(false, DOCS_DIR),
           handle.key,
           MAX_DOCUMENT_BYTES,
         );
@@ -183,11 +266,25 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
       }
     },
 
-    async save(handle, content) {
+    async save(handle, content, options) {
       try {
-        await writeText(await dir(DOCS_DIR), handle.key, content);
-        const { modifiedAt } = await readText(await dir(DOCS_DIR), handle.key);
-        return { modifiedAt };
+        return await withDocumentLock(handle.key, async () => {
+          const docs = await dir(true, DOCS_DIR);
+          if (options?.force !== true && options?.expectedModifiedAt !== undefined) {
+            let currentModifiedAt: number | null = null;
+            try {
+              currentModifiedAt = await modifiedAt(docs, handle.key);
+            } catch (error) {
+              if ((error as { name?: string } | null)?.name !== "NotFoundError") throw error;
+            }
+            if (currentModifiedAt !== options.expectedModifiedAt) {
+              throw new FileStoreError("conflict", `${handle.label} changed since it was opened`);
+            }
+          }
+          await writeText(docs, handle.key, content);
+          const { modifiedAt: writtenAt } = await readText(docs, handle.key);
+          return { modifiedAt: writtenAt };
+        });
       } catch (error) {
         throw wrap(error, `cannot save ${handle.label}`);
       }
@@ -201,28 +298,63 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
         safeDocumentFilename(suggestedName),
       );
       if (choice === null) throw new FileStoreError("cancelled", "save cancelled");
-      const key = typeof choice === "string" ? safeDocumentFilename(choice) : choice.key;
+      const target = isSavePickerChoice(choice) ? choice.handle : choice;
+      const overwrite = isSavePickerChoice(choice) && choice.overwrite;
+      const key = typeof target === "string" ? safeDocumentFilename(target) : target.key;
       const handle = handleFor(key);
-      const { modifiedAt } = await store.save(handle, content);
+      const docs = await dir(true, DOCS_DIR);
+      try {
+        await docs.getFileHandle(key);
+        if (!overwrite) {
+          throw new FileStoreError("already-exists", `${handle.label} already exists`);
+        }
+      } catch (error) {
+        if ((error as { name?: string } | null)?.name !== "NotFoundError") throw error;
+      }
+      const { modifiedAt } = await store.save(
+        handle,
+        content,
+        overwrite ? { force: true } : { expectedModifiedAt: null },
+      );
       return { handle, modifiedAt };
     },
 
     async writeRecovery(key, content) {
       try {
-        const directory = await recoveryDirFor(key);
-        const existing = (await namesIn(directory)).sort();
+        const payload = JSON.stringify({ content, savedAt: now() });
+        if (new TextEncoder().encode(payload).byteLength > MAX_DOCUMENT_BYTES) {
+          throw new FileStoreError(
+            "io",
+            `recovery for ${key} exceeds the ${MAX_DOCUMENT_BYTES}-byte size limit`,
+          );
+        }
+        const directory = await recoveryDirFor(key, true);
+        const existing = await recoveryNames(directory);
         // Sequence from the highest existing name, so a torn write cannot make two
         // snapshots collide.
-        const last = existing.at(-1)?.replace(/\.json$/u, "") ?? "0";
-        const seq = String(Number(last) + 1).padStart(6, "0");
-        await writeText(directory, `${seq}.json`, JSON.stringify({ content, savedAt: now() }));
+        const last = Number(existing.at(-1)?.match(RECOVERY_FILE)?.[1] ?? "0");
+        let next = last + 1;
+        if (!Number.isSafeInteger(next) || next > 999_999) {
+          const used = new Set(existing);
+          next = 1;
+          while (used.has(`${String(next).padStart(6, "0")}.json`)) next++;
+        }
+        const seq = String(next).padStart(6, "0");
+        await writeText(directory, `${seq}.json`, payload);
 
         // Prune oldest-first. Done after the write, so a failure here leaves an
         // over-long history rather than losing the snapshot just taken.
-        const after = (await namesIn(directory)).sort();
-        for (const name of after.slice(0, Math.max(0, after.length - RECOVERY_HISTORY_LIMIT))) {
-          await directory.removeEntry(name);
+        const after = await recoveryNames(directory);
+        const byAge: Array<{ name: string; modifiedAt: number }> = [];
+        for (const name of after) {
+          const file = await (await directory.getFileHandle(name)).getFile();
+          byAge.push({ name, modifiedAt: file.lastModified });
         }
+        byAge.sort((a, b) => a.modifiedAt - b.modifiedAt || a.name.localeCompare(b.name));
+        for (const entry of byAge.slice(0, Math.max(0, byAge.length - RECOVERY_HISTORY_LIMIT))) {
+          await directory.removeEntry(entry.name);
+        }
+        await pruneStoredRecoveries();
       } catch (error) {
         throw wrap(error, `cannot write recovery for ${key}`);
       }
@@ -230,7 +362,8 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async clearRecovery(key) {
       try {
-        const parent = await dir(RECOVERY_DIR);
+        const parent = await existingDir(RECOVERY_DIR);
+        if (parent === null) return;
         await parent.removeEntry(key, { recursive: true });
       } catch (error) {
         // Nothing to clear is the common case, not a failure.
@@ -241,13 +374,15 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async dropRecovery(id) {
       const { key, file } = splitRecoveryId(id);
-      if (key === null) return;
+      if (key === null || !RECOVERY_FILE.test(file)) return;
       try {
-        const directory = await recoveryDirFor(key);
+        const directory = await existingDir(RECOVERY_DIR, key);
+        if (directory === null) return;
         await directory.removeEntry(file);
         // Drop the now-empty directory too, so listRecoveries stops walking it.
         if ((await namesIn(directory)).length === 0) {
-          await (await dir(RECOVERY_DIR)).removeEntry(key, { recursive: true });
+          const parent = await existingDir(RECOVERY_DIR);
+          await parent?.removeEntry(key, { recursive: true });
         }
       } catch (error) {
         if ((error as { name?: string } | null)?.name === "NotFoundError") return;
@@ -257,42 +392,57 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
 
     async listRecoveries() {
       const out: RecoveryInfo[] = [];
-      const parent = await dir(RECOVERY_DIR);
-      const docsDir = await dir(DOCS_DIR);
+      const parent = await existingDir(RECOVERY_DIR);
+      if (parent === null) return [];
+      const docsDir = await existingDir(DOCS_DIR);
 
-      for await (const [key, entry] of parent.entries()) {
-        if (entry.kind !== "directory") continue;
+      // Stat first, then read newest-first under a byte ceiling. This bounds the
+      // strings retained by the startup prompt even if storage was hand-edited.
+      const candidates = (await storedRecoveries(parent)).sort(
+        (a, b) => b.modifiedAt - a.modifiedAt || b.name.localeCompare(a.name),
+      );
+      const sourceTimes = new Map<string, number | null>();
+      let retainedBytes = 0;
+      for (const candidate of candidates.slice(0, RECOVERY_TOTAL_LIMIT)) {
+        if (retainedBytes + candidate.size > RECOVERY_STARTUP_BYTES) continue;
 
-        // The source's mtime decides whether any of this is worth offering.
-        let sourceModifiedAt: number | null = null;
-        try {
-          sourceModifiedAt = await modifiedAt(docsDir, key);
-        } catch {
-          // Never saved, or deleted since — every snapshot is then worth offering.
-        }
-
-        const directory = entry as FileSystemDirectoryHandle;
-        for (const file of (await namesIn(directory)).sort()) {
-          let parsed: { content?: unknown; savedAt?: unknown };
+        let sourceModifiedAt = sourceTimes.get(candidate.key);
+        if (sourceModifiedAt === undefined) {
+          sourceModifiedAt = null;
           try {
-            parsed = JSON.parse(
-              (await readText(directory, file, MAX_DOCUMENT_BYTES)).text,
-            ) as typeof parsed;
+            if (docsDir !== null) sourceModifiedAt = await modifiedAt(docsDir, candidate.key);
           } catch {
-            // A torn write: skip this snapshot, keep the rest of the history.
-            continue;
+            // Never saved, or deleted since — every snapshot is then worth offering.
           }
-          if (typeof parsed.content !== "string" || typeof parsed.savedAt !== "number") continue;
-          if (sourceModifiedAt !== null && sourceModifiedAt >= parsed.savedAt) continue;
-
-          out.push({
-            id: recoveryId(key, file),
-            handle: handleFor(key),
-            content: parsed.content,
-            recoveredAt: parsed.savedAt,
-            sourceModifiedAt,
-          });
+          sourceTimes.set(candidate.key, sourceModifiedAt);
         }
+
+        let parsed: { content?: unknown; savedAt?: unknown };
+        try {
+          parsed = JSON.parse(
+            (await readText(candidate.directory, candidate.name, MAX_DOCUMENT_BYTES)).text,
+          ) as typeof parsed;
+        } catch {
+          // A torn write: skip this snapshot, keep the rest of the history.
+          continue;
+        }
+        if (
+          typeof parsed.content !== "string" ||
+          typeof parsed.savedAt !== "number" ||
+          !Number.isFinite(parsed.savedAt)
+        ) {
+          continue;
+        }
+        if (sourceModifiedAt !== null && sourceModifiedAt >= parsed.savedAt) continue;
+
+        retainedBytes += candidate.size;
+        out.push({
+          id: recoveryId(candidate.key, candidate.name),
+          handle: handleFor(candidate.key),
+          content: parsed.content,
+          recoveredAt: parsed.savedAt,
+          sourceModifiedAt,
+        });
       }
 
       return out.sort((a, b) => b.recoveredAt - a.recoveredAt);
@@ -308,7 +458,7 @@ export function createOpfsFileStore(opts: OpfsFileStoreOptions): OpfsFileStore {
       entries.unshift({ handle: handleFor(handle.key), openedAt: now() });
       try {
         await writeText(
-          await dir(META_DIR),
+          await dir(true, META_DIR),
           RECENT_FILE,
           JSON.stringify(entries.slice(0, RECENT_LIMIT)),
         );

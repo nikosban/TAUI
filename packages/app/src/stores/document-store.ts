@@ -31,6 +31,8 @@ import type { DocHandle } from "../ports/file-store.js";
 export interface DocumentState {
   history: History;
   handle: DocHandle | null;
+  /** Mtime observed when the current handle was opened or last saved. */
+  modifiedAt: number | null;
   dirty: boolean;
   /** Bumped whenever `history.present` changes, including during a drag preview. */
   revision: number;
@@ -53,7 +55,7 @@ export interface DocumentState {
   undo(): void;
   redo(): void;
   /** Adopts a freshly opened or created document, discarding history. */
-  load(doc: TuiDocument, handle: DocHandle | null): void;
+  load(doc: TuiDocument, handle: DocHandle | null, modifiedAt?: number | null): void;
   /**
    * Acknowledges the exact revision written by a completed save.
    *
@@ -61,7 +63,12 @@ export interface DocumentState {
    * continued during Save As, but the document becomes clean only when the
    * written revision is still current. A stale generation is ignored entirely.
    */
-  markSaved(handle: DocHandle, revision: number, generation: number): boolean;
+  markSaved(
+    handle: DocHandle,
+    revision: number,
+    generation: number,
+    modifiedAt?: number | null,
+  ): boolean;
   /**
    * Marks the document as differing from any file.
    *
@@ -76,6 +83,7 @@ export function createDocumentStore(initial: TuiDocument) {
   return create<DocumentState>((set, get) => ({
     history: createHistory(initial),
     handle: null,
+    modifiedAt: null,
     dirty: false,
     revision: 0,
     generation: 0,
@@ -116,17 +124,18 @@ export function createDocumentStore(initial: TuiDocument) {
       set({ history, dirty: true, revision: get().revision + 1 });
     },
 
-    load(doc, handle) {
+    load(doc, handle, modifiedAt = null) {
       set({
         history: createHistory(doc),
         handle,
+        modifiedAt,
         dirty: false,
         revision: get().revision + 1,
         generation: get().generation + 1,
       });
     },
 
-    markSaved(handle, revision, generation) {
+    markSaved(handle, revision, generation, modifiedAt = null) {
       const current = get();
       // A save from a replaced document must not attach its old path or clean
       // state to the new one. Revisions alone cannot distinguish replacement
@@ -134,6 +143,7 @@ export function createDocumentStore(initial: TuiDocument) {
       if (current.generation !== generation) return false;
       set({
         handle,
+        modifiedAt,
         // A write of revision N says nothing about edits made while it was in
         // flight. `true`, rather than preserving the old flag, also covers an
         // in-progress preview whose revision moved before its eventual commit.

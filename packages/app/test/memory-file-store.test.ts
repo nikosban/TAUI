@@ -102,7 +102,8 @@ describe("open and save", () => {
     const byHandle = createMemoryFileStore({
       now,
       initial: { "a.tui": "content-a" },
-      picker: async (entries) => entries[0] ?? null,
+      picker: async (entries, mode) =>
+        mode === "save" ? { handle: entries[0] ?? "a.tui", overwrite: true } : (entries[0] ?? null),
     });
     const opened = await byHandle.openWithPicker();
     expect(opened.handle.key).toBe("a.tui");
@@ -111,6 +112,18 @@ describe("open and save", () => {
     const saved = await byHandle.saveAs("overwritten", "ignored.tui");
     expect(saved.handle.key).toBe("a.tui");
     expect(byHandle.snapshot()["a.tui"]).toBe("overwritten");
+  });
+
+  it("refuses Save As over an existing name without explicit overwrite intent", async () => {
+    const createOnly = createMemoryFileStore({
+      now,
+      initial: { "a.tui": "original" },
+      picker: async () => "a.tui",
+    });
+    await expect(createOnly.saveAs("replacement", "a.tui")).rejects.toMatchObject({
+      code: "already-exists",
+    });
+    expect(createOnly.snapshot()["a.tui"]).toBe("original");
   });
 
   it("reports a missing document as not-found", async () => {

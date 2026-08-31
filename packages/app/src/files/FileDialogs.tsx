@@ -10,14 +10,14 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { DocHandle, PickerFn, RecoveryInfo } from "../ports/file-store.js";
-import { filenameProblem } from "../safe-filename.js";
+import type { DocHandle, PickerFn, RecoveryInfo, SavePickerChoice } from "../ports/file-store.js";
+import { filenameProblem, safeDocumentFilename } from "../safe-filename.js";
 
 export interface PickerRequest {
   readonly entries: readonly DocHandle[];
   readonly mode: "open" | "save";
   readonly suggestedName: string;
-  readonly resolve: (choice: DocHandle | string | null) => void;
+  readonly resolve: (choice: DocHandle | string | SavePickerChoice | null) => void;
 }
 
 export interface PickerController {
@@ -90,8 +90,19 @@ export function usePicker(): { picker: PickerFn; request: PickerRequest | null }
 
 export function PickerDialog({ request }: { request: PickerRequest }): React.JSX.Element {
   const [name, setName] = useState(request.suggestedName);
+  const [overwriteTarget, setOverwriteTarget] = useState<string | null>(null);
   const saving = request.mode === "save";
   const nameError = saving ? filenameProblem(name) : null;
+
+  const submitSave = (rawName: string): void => {
+    const key = safeDocumentFilename(rawName);
+    const exists = request.entries.some((entry) => entry.key === key);
+    if (exists) {
+      setOverwriteTarget(key);
+      return;
+    }
+    request.resolve({ handle: key, overwrite: false });
+  };
 
   return (
     <div className="modal-backdrop">
@@ -110,9 +121,12 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
               // biome-ignore lint/a11y/noAutofocus: a modal that needs a name should accept typing immediately
               autoFocus
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                setOverwriteTarget(null);
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && nameError === null) request.resolve(name.trim());
+                if (e.key === "Enter" && nameError === null) submitSave(name.trim());
                 if (e.key === "Escape") request.resolve(null);
                 e.stopPropagation();
               }}
@@ -131,7 +145,14 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
               <li key={entry.key}>
                 <button
                   type="button"
-                  onClick={() => request.resolve(saving ? entry.key : entry)}
+                  onClick={() => {
+                    if (saving) {
+                      setName(entry.key);
+                      setOverwriteTarget(entry.key);
+                    } else {
+                      request.resolve(entry);
+                    }
+                  }}
                   title={entry.display}
                 >
                   {entry.label}
@@ -141,6 +162,12 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
           </ul>
         )}
 
+        {saving && overwriteTarget !== null && (
+          <p className="warn small" role="alert">
+            {overwriteTarget} already exists. Replacing it cannot be undone.
+          </p>
+        )}
+
         <div className="modal-actions">
           <button type="button" className="chip" onClick={() => request.resolve(null)}>
             Cancel
@@ -148,11 +175,17 @@ export function PickerDialog({ request }: { request: PickerRequest }): React.JSX
           {saving && (
             <button
               type="button"
-              className="chip active"
+              className={overwriteTarget === null ? "chip active" : "chip danger"}
               disabled={nameError !== null}
-              onClick={() => request.resolve(name.trim())}
+              onClick={() => {
+                if (overwriteTarget !== null) {
+                  request.resolve({ handle: overwriteTarget, overwrite: true });
+                } else {
+                  submitSave(name.trim());
+                }
+              }}
             >
-              Save
+              {overwriteTarget === null ? "Save" : "Replace existing"}
             </button>
           )}
         </div>
@@ -165,6 +198,7 @@ export interface RecoveryDialogProps {
   readonly snapshots: readonly RecoveryInfo[];
   readonly now: number;
   readonly onRestore: (info: RecoveryInfo) => void;
+  readonly onDiscard: (info: RecoveryInfo) => void;
   readonly onDiscardAll: () => void;
   readonly onDismiss: () => void;
 }
@@ -205,6 +239,7 @@ export function RecoveryDialog({
   snapshots,
   now,
   onRestore,
+  onDiscard,
   onDiscardAll,
   onDismiss,
 }: RecoveryDialogProps): React.JSX.Element {
@@ -220,9 +255,22 @@ export function RecoveryDialog({
         <ul className="modal-list recovery-list">
           {snapshots.map((info) => (
             <li key={info.id}>
-              <button type="button" onClick={() => onRestore(info)} title={info.handle.display}>
+              <button
+                type="button"
+                className="recovery-restore"
+                onClick={() => onRestore(info)}
+                title={info.handle.display}
+              >
                 <span className="recovery-name">{recoveryLabel(info.handle.key)}</span>
                 <span className="recovery-age">{relativeTime(info.recoveredAt, now)}</span>
+              </button>
+              <button
+                type="button"
+                className="chip tiny danger recovery-discard"
+                onClick={() => onDiscard(info)}
+                aria-label={`Discard recovery for ${recoveryLabel(info.handle.key)}`}
+              >
+                Discard
               </button>
             </li>
           ))}

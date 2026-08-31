@@ -54,6 +54,13 @@ export interface RecentEntry {
  */
 export const RECOVERY_HISTORY_LIMIT = 10;
 
+/** Global recovery ceilings, across every document in browser storage. */
+export const RECOVERY_TOTAL_LIMIT = 50;
+export const RECOVERY_TOTAL_BYTES = 64 * 1024 * 1024;
+
+/** Maximum recovery payload retained in memory while the startup prompt is open. */
+export const RECOVERY_STARTUP_BYTES = 32 * 1024 * 1024;
+
 /**
  * Backend preflight for untrusted document and recovery files.
  * Core also enforces a character limit after decoding; this byte limit prevents
@@ -80,6 +87,8 @@ export interface RecoveryInfo {
 export type FileStoreErrorCode =
   /** The user dismissed a dialog. Not an error state in the UI. */
   | "cancelled"
+  | "already-exists"
+  | "conflict"
   | "not-found"
   | "permission-denied"
   | "io"
@@ -107,6 +116,17 @@ export class FileStoreError extends Error {
 export const isCancelled = (e: unknown): boolean =>
   e instanceof FileStoreError && e.code === "cancelled";
 
+/** A safe message for values JavaScript permits code to throw. */
+export const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "string" ? error : "unknown error";
+
+interface SaveOptions {
+  /** Mtime observed when this document was opened or last saved. */
+  readonly expectedModifiedAt?: number | null;
+  /** Explicitly replace bytes even though the observed version no longer matches. */
+  readonly force?: boolean;
+}
+
 interface FileStoreCapabilities {
   /** False in the browser: no OS dialog, no real paths. */
   readonly nativeDialogs: boolean;
@@ -123,7 +143,11 @@ export interface FileStore {
   openWithPicker(): Promise<OpenResult>;
   openHandle(handle: DocHandle): Promise<OpenResult>;
 
-  save(handle: DocHandle, content: string): Promise<{ modifiedAt: number | null }>;
+  save(
+    handle: DocHandle,
+    content: string,
+    options?: SaveOptions,
+  ): Promise<{ modifiedAt: number | null }>;
   saveAs(
     content: string,
     suggestedName: string,
@@ -170,7 +194,16 @@ export type PickerFn = (
   entries: readonly DocHandle[],
   mode: "open" | "save",
   suggestedName?: string,
-) => Promise<DocHandle | string | null>;
+) => Promise<DocHandle | string | SavePickerChoice | null>;
+
+/**
+ * Save-mode picker result. Existing names require `overwrite: true`; a raw string
+ * or handle remains accepted for open pickers and means create-only during Save As.
+ */
+export interface SavePickerChoice {
+  readonly handle: DocHandle | string;
+  readonly overwrite: boolean;
+}
 
 /** Injectable clock, so autosave and recovery tests need no fake timers. */
 export type Clock = () => number;

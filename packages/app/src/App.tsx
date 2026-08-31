@@ -339,7 +339,7 @@ export function App(): React.JSX.Element {
           toolStore.setClipboard(null);
         },
         adopt: (next, handle, opts) => {
-          documentStore.getState().load(next, handle);
+          documentStore.getState().load(next, handle, opts?.modifiedAt);
           if (opts?.dirty === true) documentStore.getState().markDirty();
         },
       }),
@@ -358,6 +358,7 @@ export function App(): React.JSX.Element {
             dirty: state.dirty,
             revision: state.revision,
             generation: state.generation,
+            modifiedAt: state.modifiedAt,
             // Typing counts as busy: `preview` bumps the revision per keystroke,
             // so a burst would otherwise look like a settled state and get
             // snapshotted half-typed.
@@ -365,12 +366,13 @@ export function App(): React.JSX.Element {
           };
         },
         load: (next, handle, opts) => replacement.replace(next, handle, opts),
-        markSaved: (handle, revision, generation) =>
-          documentStore.getState().markSaved(handle, revision, generation),
+        markSaved: (handle, revision, generation, modifiedAt) =>
+          documentStore.getState().markSaved(handle, revision, generation, modifiedAt),
+        confirmConflict: askConfirm,
         now: () => Date.now(),
         notify,
       }),
-    [store, controller, notify, replacement],
+    [store, controller, notify, replacement, askConfirm],
   );
   const [fileStatus, setFileStatus] = useState(() => files.status());
 
@@ -1026,8 +1028,16 @@ export function App(): React.JSX.Element {
               if (restored) setRecoveries(null);
             });
           }}
+          onDiscard={(info) => {
+            void files.discard(info).then((discarded) => {
+              if (!discarded) return;
+              setRecoveries((current) => current?.filter((entry) => entry.id !== info.id) ?? null);
+            });
+          }}
           onDiscardAll={() => {
-            void files.discardAll().then(() => setRecoveries(null));
+            void files.discardAll().then((discarded) => {
+              if (discarded) setRecoveries(null);
+            });
           }}
           onDismiss={() => setRecoveries(null)}
         />

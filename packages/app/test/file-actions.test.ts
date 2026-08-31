@@ -42,6 +42,7 @@ let state: {
   dirty: boolean;
   revision: number;
   generation: number;
+  modifiedAt: number | null;
   busy: boolean;
 };
 
@@ -53,7 +54,13 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function build(opts: { picker?: PickerFn; store?: FileStore } = {}): FileActions {
+function build(
+  opts: {
+    picker?: PickerFn;
+    store?: FileStore;
+    confirmConflict?: (message: string) => boolean;
+  } = {},
+): FileActions {
   return createFileActions({
     store: opts.store ?? store,
     snapshot: () => state,
@@ -65,14 +72,16 @@ function build(opts: { picker?: PickerFn; store?: FileStore } = {}): FileActions
         dirty: opts?.dirty === true,
         revision: state.revision + 1,
         generation: state.generation + 1,
+        modifiedAt: opts?.modifiedAt ?? null,
       };
       return true;
     },
-    markSaved: (handle, revision, generation) => {
+    markSaved: (handle, revision, generation, modifiedAt) => {
       if (state.generation !== generation) return false;
-      state = { ...state, handle, dirty: state.revision !== revision };
+      state = { ...state, handle, modifiedAt, dirty: state.revision !== revision };
       return true;
     },
+    confirmConflict: opts.confirmConflict ?? (() => true),
     now: () => clock,
     notify: (message) => notices.push(message),
   });
@@ -100,6 +109,7 @@ beforeEach(() => {
     dirty: false,
     revision: 0,
     generation: 0,
+    modifiedAt: null,
     busy: false,
   };
   actions = build();
@@ -437,6 +447,39 @@ describe("save", () => {
       expect(notices.join()).toContain("Saved, but");
     },
   );
+
+  it("keeps a newer external version when conflict replacement is declined", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    const opened = await store.save(handle, serialize(docWith("opened")));
+    state = { ...state, handle, modifiedAt: opened.modifiedAt };
+    edit("local edit");
+    await store.save(handle, serialize(docWith("external edit")), { force: true });
+    const prompts: string[] = [];
+
+    const conflicting = build({
+      confirmConflict: (message) => {
+        prompts.push(message);
+        return false;
+      },
+    });
+    expect(await conflicting.save()).toBe(false);
+    expect(prompts).toHaveLength(1);
+    expect(storedText("a.tui")).toContain("external edit");
+    expect(state.dirty).toBe(true);
+  });
+
+  it("replaces a conflicting external version only after confirmation", async () => {
+    const handle = { key: "a.tui", label: "a.tui", display: "a.tui" };
+    const opened = await store.save(handle, serialize(docWith("opened")));
+    state = { ...state, handle, modifiedAt: opened.modifiedAt };
+    edit("confirmed local edit");
+    await store.save(handle, serialize(docWith("external edit")), { force: true });
+
+    expect(await build({ confirmConflict: () => true }).save()).toBe(true);
+    expect(storedText("a.tui")).toContain("confirmed local edit");
+    expect(state.dirty).toBe(false);
+    expect(state.modifiedAt).not.toBe(opened.modifiedAt);
+  });
 });
 
 describe("open", () => {
@@ -553,6 +596,7 @@ describe("open", () => {
       snapshot: () => state,
       load: () => false,
       markSaved: () => true,
+      confirmConflict: () => true,
       now: () => clock,
       notify: (message) => notices.push(message),
     });
@@ -865,6 +909,7 @@ describe("recovery", () => {
       snapshot: () => state,
       load: () => false,
       markSaved: () => true,
+      confirmConflict: () => true,
       now: () => clock,
       notify: (message) => notices.push(message),
     });
@@ -948,6 +993,7 @@ describe("the crash-and-recover round trip", () => {
       dirty: false,
       revision: 0,
       generation: 0,
+      modifiedAt: null,
       busy: false,
     };
     const relaunched = build();
@@ -969,6 +1015,7 @@ describe("the crash-and-recover round trip", () => {
       dirty: false,
       revision: 0,
       generation: 0,
+      modifiedAt: null,
       busy: false,
     };
     expect(await build().listRecoveries()).toEqual([]);

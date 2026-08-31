@@ -15,6 +15,7 @@ export const DISCARD_CHANGES_PROMPT =
 
 interface ReplacementOptions {
   readonly dirty?: boolean;
+  readonly modifiedAt?: number | null;
 }
 
 export interface ReplacementPolicyDeps {

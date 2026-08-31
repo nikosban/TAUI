@@ -18,7 +18,10 @@ import {
   initialAutosaveState,
 } from "./autosave.js";
 import type { DocHandle, FileStore, RecoveryInfo } from "./file-store.js";
-import { isCancelled } from "./file-store.js";
+import { errorMessage, FileStoreError, isCancelled } from "./file-store.js";
+
+const SAVE_CONFLICT_PROMPT =
+  "This file changed in another tab or outside the app. Replace that newer version with your current document?";
 
 export interface FileActionsDeps {
   readonly store: FileStore;
@@ -30,6 +33,8 @@ export interface FileActionsDeps {
     readonly revision: number;
     /** Changes only when a different document is loaded or created. */
     readonly generation: number;
+    /** Mtime observed on open or the last completed save. */
+    readonly modifiedAt: number | null;
     /**
      * True while a gesture or typing burst is open.
      *
@@ -46,10 +51,16 @@ export interface FileActionsDeps {
   readonly load: (
     doc: TuiDocument,
     handle: DocHandle | null,
-    opts?: { readonly dirty?: boolean },
+    opts?: { readonly dirty?: boolean; readonly modifiedAt?: number | null },
   ) => boolean;
   /** Acknowledges the exact revision a completed write persisted. */
-  readonly markSaved: (handle: DocHandle, revision: number, generation: number) => boolean;
+  readonly markSaved: (
+    handle: DocHandle,
+    revision: number,
+    generation: number,
+    modifiedAt: number | null,
+  ) => boolean;
+  readonly confirmConflict: (message: string) => boolean;
   readonly now: () => number;
   /** User-facing message. Warnings from `deserialize` arrive here too. */
   readonly notify: (message: string) => void;
@@ -74,8 +85,8 @@ export interface FileActions {
   listRecoveries(): Promise<RecoveryInfo[]>;
   /** Loads a snapshot as the current document, leaving it dirty and unsaved. */
   restore(info: RecoveryInfo): Promise<boolean>;
-  discard(info: RecoveryInfo): Promise<void>;
-  discardAll(): Promise<void>;
+  discard(info: RecoveryInfo): Promise<boolean>;
+  discardAll(): Promise<boolean>;
   /** The key the current document generation autosaves under. */
   autosaveKey(): string;
   /** Current interactive operation; autosave is deliberately background-only. */
@@ -151,8 +162,9 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     revision: number,
     generation: number,
     untitledRecoveryKey: string | null,
+    modifiedAt: number | null,
   ): Promise<void> => {
-    const belongsToCurrentDocument = deps.markSaved(handle, revision, generation);
+    const belongsToCurrentDocument = deps.markSaved(handle, revision, generation, modifiedAt);
     if (belongsToCurrentDocument) autosave = autosaveStateAfterSave(revision, deps.now());
 
     const writtenRevisionIsCurrent = (): boolean => {
@@ -168,7 +180,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     try {
       await deps.store.pushRecent(handle);
     } catch (error) {
-      deps.notify(`Saved, but could not update recent files: ${(error as Error).message}`);
+      deps.notify(`Saved, but could not update recent files: ${errorMessage(error)}`);
     }
 
     // The bytes still landed and belong in recents, but no state or recovery
@@ -183,7 +195,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     try {
       await deps.store.clearRecovery(handle.key);
     } catch (error) {
-      deps.notify(`Saved, but could not clear recovery data: ${(error as Error).message}`);
+      deps.notify(`Saved, but could not clear recovery data: ${errorMessage(error)}`);
     }
 
     // A document saved under a real name no longer needs its untitled history.
@@ -193,13 +205,13 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         await deps.store.clearRecovery(untitledRecoveryKey);
         if (untitled?.key === untitledRecoveryKey) untitled = null;
       } catch (error) {
-        deps.notify(`Saved, but could not clear recovery data: ${(error as Error).message}`);
+        deps.notify(`Saved, but could not clear recovery data: ${errorMessage(error)}`);
       }
     }
   };
 
   const performSave = async (kind: SaveKind, requestedGeneration: number): Promise<boolean> => {
-    const { doc, handle, revision, generation } = deps.snapshot();
+    const { doc, handle, revision, generation, modifiedAt } = deps.snapshot();
     // A queued click belongs to the document that was visible when it happened.
     // If that document was replaced while an earlier write was in flight, do not
     // unexpectedly save the replacement (or open a Save As dialog for it).
@@ -210,15 +222,35 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
       if (kind === "saveAs" || handle === null) {
         const suggested = handle?.label ?? "untitled.tui";
         const result = await deps.store.saveAs(serialize(doc), suggested);
-        await afterWrite(result.handle, revision, generation, untitledRecoveryKey);
+        await afterWrite(
+          result.handle,
+          revision,
+          generation,
+          untitledRecoveryKey,
+          result.modifiedAt,
+        );
       } else {
-        await deps.store.save(handle, serialize(doc));
-        await afterWrite(handle, revision, generation, untitledRecoveryKey);
+        let result: { modifiedAt: number | null };
+        try {
+          result = await deps.store.save(handle, serialize(doc), {
+            expectedModifiedAt: modifiedAt,
+          });
+        } catch (error) {
+          if (
+            !(error instanceof FileStoreError) ||
+            error.code !== "conflict" ||
+            !deps.confirmConflict(SAVE_CONFLICT_PROMPT)
+          ) {
+            throw error;
+          }
+          result = await deps.store.save(handle, serialize(doc), { force: true });
+        }
+        await afterWrite(handle, revision, generation, untitledRecoveryKey, result.modifiedAt);
       }
       return true;
     } catch (error) {
       if (isCancelled(error)) return false;
-      deps.notify(`Could not save: ${(error as Error).message}`);
+      deps.notify(`Could not save: ${errorMessage(error)}`);
       return false;
     }
   };
@@ -263,7 +295,11 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     });
 
   const requestOpen = async (
-    read: () => Promise<{ readonly content: string; readonly handle: DocHandle }>,
+    read: () => Promise<{
+      readonly content: string;
+      readonly handle: DocHandle;
+      readonly modifiedAt: number | null;
+    }>,
     failureLabel: string,
   ): Promise<boolean> => {
     // Re-entrant opens and opens during a save are deliberately rejected. The
@@ -273,11 +309,11 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     try {
       return await inPersistenceOrder(async () => {
         const opened = await read();
-        return applyOpened(opened.content, opened.handle);
+        return applyOpened(opened.content, opened.handle, opened.modifiedAt);
       });
     } catch (error) {
       if (isCancelled(error)) return false;
-      deps.notify(`${failureLabel}: ${(error as Error).message}`);
+      deps.notify(`${failureLabel}: ${errorMessage(error)}`);
       return false;
     } finally {
       setOperation("idle");
@@ -299,7 +335,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         // than silently skipped for good.
         autosave = decision.state;
       } catch (error) {
-        deps.notify(`Autosave failed: ${(error as Error).message}`);
+        deps.notify(`Autosave failed: ${errorMessage(error)}`);
       }
     });
 
@@ -348,7 +384,7 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
         return await deps.store.listRecoveries();
       } catch (error) {
         // A broken recovery directory must not stop the app starting.
-        deps.notify(`Could not read recovery data: ${(error as Error).message}`);
+        deps.notify(`Could not read recovery data: ${errorMessage(error)}`);
         return [];
       }
     },
@@ -372,22 +408,27 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
     async discard(info) {
       try {
         await deps.store.dropRecovery(info.id);
+        return true;
       } catch (error) {
-        deps.notify(`Could not discard that snapshot: ${(error as Error).message}`);
+        deps.notify(`Could not discard that snapshot: ${errorMessage(error)}`);
+        return false;
       }
     },
 
     async discardAll() {
       const found = await actions.listRecoveries();
+      let discarded = true;
       // Group first: clearRecovery works per document, so one call per key beats
       // one per snapshot.
       for (const key of new Set(found.map((info) => info.handle.key))) {
         try {
           await deps.store.clearRecovery(key);
         } catch (error) {
-          deps.notify(`Could not discard snapshots for ${key}: ${(error as Error).message}`);
+          discarded = false;
+          deps.notify(`Could not discard snapshots for ${key}: ${errorMessage(error)}`);
         }
       }
+      return discarded;
     },
 
     autosaveKey() {
@@ -406,13 +447,13 @@ export function createFileActions(deps: FileActionsDeps): FileActions {
   };
 
   /** Shared tail of open and openHandle. */
-  function applyOpened(content: string, handle: DocHandle): boolean {
+  function applyOpened(content: string, handle: DocHandle, modifiedAt: number | null): boolean {
     const result = readDocument(content);
     if (result === null) {
       deps.notify(`${handle.label} is not a readable .tui document.`);
       return false;
     }
-    if (!deps.load(result.doc, handle)) return false;
+    if (!deps.load(result.doc, handle, { modifiedAt })) return false;
     for (const warning of result.warnings) deps.notify(`${handle.label}: ${warning}`);
     autosave = autosaveStateAfterSave(deps.snapshot().revision, deps.now());
     return true;

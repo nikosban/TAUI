@@ -15,6 +15,7 @@ import {
   MAX_DOCUMENT_BYTES,
   type PickerFn,
   RECOVERY_HISTORY_LIMIT,
+  RECOVERY_TOTAL_LIMIT,
 } from "../src/ports/file-store.js";
 import { createOpfsFileStore, type OpfsFileStore } from "../src/ports/opfs-file-store.js";
 
@@ -34,6 +35,8 @@ class FakeDir {
   readonly kind = "directory" as const;
   readonly files = new Map<string, FakeFile>();
   readonly dirs = new Map<string, FakeDir>();
+  failNextWrite = false;
+  aborts = 0;
 
   constructor(private readonly clock: () => number) {}
 
@@ -67,10 +70,17 @@ class FakeDir {
         let buffer = "";
         return {
           write: async (chunk: string) => {
+            if (dir.failNextWrite) {
+              dir.failNextWrite = false;
+              throw new Error("write failed");
+            }
             buffer += chunk;
           },
           close: async () => {
             dir.files.set(name, { content: buffer, lastModified: dir.clock() });
+          },
+          abort: async () => {
+            dir.aborts++;
           },
         };
       },
@@ -126,6 +136,9 @@ const handle = (key: string) => ({ key, label: key, display: key });
 /** Reads the raw snapshot filenames for a document, sorted. */
 const snapshotNames = (key: string): string[] =>
   [...(root.dirs.get("recovery")?.dirs.get(key)?.files.keys() ?? [])].sort();
+
+const snapshotNamesIn = (directory: FakeDir): string[] =>
+  [...directory.files.keys()].filter((name) => /^\d{6}\.json$/u.test(name));
 
 beforeEach(() => {
   clock = 1000;
@@ -186,6 +199,24 @@ describe("save and open", () => {
     expect(second.modifiedAt).toBeGreaterThan(first.modifiedAt ?? 0);
   });
 
+  it("detects an mtime conflict before replacing newer bytes", async () => {
+    const first = await store.save(handle("a.tui"), "v1");
+    await store.save(handle("a.tui"), "external", { force: true });
+    await expect(
+      store.save(handle("a.tui"), "stale", { expectedModifiedAt: first.modifiedAt }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect((await store.openHandle(handle("a.tui"))).content).toBe("external");
+  });
+
+  it("aborts a writable stream after a write failure", async () => {
+    await store.save(handle("a.tui"), "original");
+    const docs = root.dirs.get("docs") as FakeDir;
+    docs.failNextWrite = true;
+    await expect(store.save(handle("a.tui"), "replacement")).rejects.toMatchObject({ code: "io" });
+    expect(docs.aborts).toBe(1);
+    expect((await store.openHandle(handle("a.tui"))).content).toBe("original");
+  });
+
   it("keeps legacy keys opaque but never exposes control or bidi text in labels", async () => {
     const key = "legacy\u202Egnp.tui";
     await store.save(handle(key), "body");
@@ -237,9 +268,21 @@ describe("the picker", () => {
     const byHandle = makeStore(async (entries) => entries[0] ?? null);
     expect((await byHandle.openWithPicker()).content).toBe("body");
 
-    const savingByHandle = makeStore(async (entries) => entries[0] ?? null);
+    const savingByHandle = makeStore(async (entries) => ({
+      handle: entries[0] ?? "existing.tui",
+      overwrite: true,
+    }));
     const { handle: created } = await savingByHandle.saveAs("new body", "s.tui");
     expect(created.key).toBe("existing.tui");
+  });
+
+  it("refuses Save As over an existing name without explicit overwrite intent", async () => {
+    await store.save(handle("existing.tui"), "original");
+    const createOnly = makeStore(pickerFor("existing.tui"));
+    await expect(createOnly.saveAs("replacement", "existing.tui")).rejects.toMatchObject({
+      code: "already-exists",
+    });
+    expect((await store.openHandle(handle("existing.tui"))).content).toBe("original");
   });
 
   it("keeps a name that already ends in .tui", async () => {
@@ -300,6 +343,31 @@ describe("recovery history", () => {
     const names = snapshotNames("a.tui");
     expect(new Set(names).size).toBe(names.length);
     expect(names.at(-1)).toBe(`${String(RECOVERY_HISTORY_LIMIT + 5).padStart(6, "0")}.json`);
+  });
+
+  it("ignores malformed filenames when choosing the next sequence", async () => {
+    const recovery = await root.getDirectoryHandle("recovery", { create: true });
+    const directory = await recovery.getDirectoryHandle("a.tui", { create: true });
+    directory.files.set("NaN.json", { content: "junk", lastModified: now() });
+    directory.files.set("999999999999.json", { content: "junk", lastModified: now() });
+
+    await store.writeRecovery("a.tui", "valid");
+    expect(snapshotNames("a.tui")).toContain("000001.json");
+    expect((await store.listRecoveries()).map((entry) => entry.content)).toEqual(["valid"]);
+  });
+
+  it("bounds recovery count across documents, not only within one history", async () => {
+    for (let document = 0; document < 6; document++) {
+      for (let snapshot = 0; snapshot < RECOVERY_HISTORY_LIMIT; snapshot++) {
+        await store.writeRecovery(`doc-${document}.tui`, `${document}:${snapshot}`);
+      }
+    }
+    const count = [...(root.dirs.get("recovery")?.dirs.values() ?? [])].reduce(
+      (sum, directory) => sum + snapshotNamesIn(directory).length,
+      0,
+    );
+    expect(count).toBeLessThanOrEqual(RECOVERY_TOTAL_LIMIT);
+    expect(await store.listRecoveries()).toHaveLength(RECOVERY_TOTAL_LIMIT);
   });
 
   it("offers snapshots for a document that was never saved", async () => {
@@ -417,6 +485,19 @@ describe("recovery history", () => {
 
   it("returns nothing when no document has any history", async () => {
     expect(await store.listRecoveries()).toEqual([]);
+  });
+});
+
+describe("non-creating read and delete paths", () => {
+  it("leaves a fresh OPFS root empty", async () => {
+    await expect(store.listRecent()).resolves.toEqual([]);
+    await expect(store.listRecoveries()).resolves.toEqual([]);
+    await expect(store.clearRecovery("missing.tui")).resolves.toBeUndefined();
+    await expect(store.dropRecovery("missing.tui/000001.json")).resolves.toBeUndefined();
+    await expect(store.openHandle(handle("missing.tui"))).rejects.toMatchObject({
+      code: "not-found",
+    });
+    expect([...root.dirs.keys()]).toEqual([]);
   });
 });
 
