@@ -5,7 +5,10 @@ import {
   matchShortcut,
   SHORTCUTS,
   type ShortcutId,
+  shortcutConflicts,
   shortcutHint,
+  shortcutHints,
+  shortcutPlatform,
   shortcutsByGroup,
 } from "../src/shortcuts.js";
 
@@ -50,8 +53,16 @@ describe("matchShortcut", () => {
     expect(press("Delete")).toBe("edit.delete");
     expect(press("Backspace")).toBe("edit.delete");
     expect(press("0")).toBe("view.zoomReset");
+    expect(press(" ")).toBe("view.pan");
     expect(press("[")).toBe("layer.previous");
     expect(press("]")).toBe("layer.next");
+  });
+
+  it("resolves focused panel commands only in their declared context", () => {
+    expect(press("F2")).toBeNull();
+    expect(matchShortcut({ key: "F2", mods: NO_MODS }, "layer-list")).toBe("layer.rename");
+    expect(matchShortcut({ key: "F2", mods: NO_MODS }, "palette-list")).toBe("palette.rename");
+    expect(matchShortcut({ key: "ArrowUp", mods: NO_MODS }, "layer-list")).toBe("layer.moveUp");
   });
 
   it("accepts both glyphs for zoom, since + and = share a key", () => {
@@ -77,14 +88,17 @@ describe("the registry itself", () => {
     // Guards against a new entry silently shadowing an existing one.
     for (const shortcut of SHORTCUTS) {
       for (const key of shortcut.keys) {
-        const resolved = matchShortcut({
-          key,
-          mods: {
-            ...NO_MODS,
-            meta: shortcut.meta ?? false,
-            shift: shortcut.shift ?? false,
+        const resolved = matchShortcut(
+          {
+            key,
+            mods: {
+              ...NO_MODS,
+              meta: shortcut.meta ?? false,
+              shift: shortcut.shift ?? false,
+            },
           },
-        });
+          shortcut.scope,
+        );
         expect(resolved, `${shortcut.id} (${key}) is shadowed by ${resolved}`).toBe(shortcut.id);
       }
     }
@@ -95,35 +109,68 @@ describe("the registry itself", () => {
     // ranking. Swept over every declared key against all four modifier
     // combinations — if a future entry collides, this fails instead of silently
     // shadowing.
-    const keys = new Set(SHORTCUTS.flatMap((s) => s.keys));
-    for (const key of keys) {
-      for (const meta of [false, true]) {
-        for (const shift of [false, true]) {
-          const matches = matchingShortcuts({ key, mods: { ...NO_MODS, meta, shift } });
-          expect(
-            matches.length,
-            `${key} (meta=${meta} shift=${shift}) matched ${matches.map((m) => m.id).join(", ")}`,
-          ).toBeLessThanOrEqual(1);
+    for (const scope of ["global", "layer-list", "palette-list"] as const) {
+      const keys = new Set(
+        SHORTCUTS.filter((shortcut) => shortcut.scope === scope).flatMap(
+          (shortcut) => shortcut.keys,
+        ),
+      );
+      for (const key of keys) {
+        for (const meta of [false, true]) {
+          for (const shift of [false, true]) {
+            const matches = matchingShortcuts({ key, mods: { ...NO_MODS, meta, shift } }, scope);
+            expect(
+              matches.length,
+              `${scope}: ${key} (meta=${meta} shift=${shift}) matched ${matches
+                .map((match) => match.id)
+                .join(", ")}`,
+            ).toBeLessThanOrEqual(1);
+          }
         }
       }
     }
+    expect(shortcutConflicts()).toEqual([]);
   });
 
   it("groups every shortcut for the generated help panel", () => {
     const grouped = shortcutsByGroup();
     const total = grouped.reduce((n, g) => n + g.items.length, 0);
     expect(total).toBe(SHORTCUTS.length);
-    expect(grouped.map((g) => g.group)).toEqual(["File", "Tools", "Edit", "View", "Layer"]);
+    expect(grouped.map((g) => g.group)).toEqual([
+      "File",
+      "Tools",
+      "Edit",
+      "View",
+      "Layer",
+      "Palette",
+      "Help",
+    ]);
   });
 
-  it("renders a hint for every shortcut", () => {
+  it("keeps generated help metadata complete for every command", () => {
     for (const shortcut of SHORTCUTS) {
-      const hint = shortcutHint(shortcut);
-      expect(hint.length, shortcut.id).toBeGreaterThan(0);
+      expect(shortcut.label.length, shortcut.id).toBeGreaterThan(0);
+      expect(shortcut.context.length, shortcut.id).toBeGreaterThan(0);
+      expect(shortcut.unavailableWhen.length, shortcut.id).toBeGreaterThan(0);
+      expect(shortcutHints(shortcut, "mac").length, shortcut.id).toBe(shortcut.keys.length);
+      expect(shortcutHints(shortcut, "other").length, shortcut.id).toBe(shortcut.keys.length);
     }
     expect(shortcutHint(SHORTCUTS.find((s) => s.id === "edit.redo")!)).toBe("⌘⇧Z");
     expect(shortcutHint(SHORTCUTS.find((s) => s.id === "edit.undo")!)).toBe("⌘Z");
     expect(shortcutHint(SHORTCUTS.find((s) => s.id === "tool.box")!)).toBe("B");
-    expect(shortcutHint(SHORTCUTS.find((s) => s.id === "edit.cancel")!)).toBe("Escape");
+    expect(shortcutHint(SHORTCUTS.find((s) => s.id === "edit.cancel")!)).toBe("Esc");
+  });
+
+  it("renders macOS and non-macOS modifier labels", () => {
+    const redo = SHORTCUTS.find((shortcut) => shortcut.id === "edit.redo")!;
+    const help = SHORTCUTS.find((shortcut) => shortcut.id === "help.shortcuts")!;
+    expect(shortcutHint(redo, "mac")).toBe("⌘⇧Z");
+    expect(shortcutHint(redo, "other")).toBe("Ctrl+Shift+Z");
+    expect(shortcutHint(help, "mac")).toBe("⌘/");
+    expect(shortcutHint(help, "other")).toBe("Ctrl+/");
+    expect(shortcutPlatform("MacIntel")).toBe("mac");
+    expect(shortcutPlatform("iPad")).toBe("mac");
+    expect(shortcutPlatform("Win32")).toBe("other");
+    expect(shortcutPlatform("Linux x86_64")).toBe("other");
   });
 });

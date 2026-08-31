@@ -10,6 +10,7 @@ import {
   toText,
 } from "@tui-designer/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ShortcutHelpDialog } from "./a11y/ShortcutHelpDialog.js";
 import { classifyCoverage, coverageWarning, type ProbeMeasurement } from "./canvas/coverage.js";
 import { availableFonts, measureFont, measureProbes } from "./canvas/measure.js";
 import {
@@ -43,7 +44,13 @@ import {
   type CreateFileStoreOptions,
   createFileStore,
 } from "./ports/index.js";
-import { matchShortcut, SHORTCUTS, shortcutHint } from "./shortcuts.js";
+import {
+  matchShortcut,
+  SHORTCUTS,
+  type ShortcutId,
+  shortcutHint,
+  shortcutPlatform,
+} from "./shortcuts.js";
 import { createDocumentStore } from "./stores/document-store.js";
 import { usePrefsStore } from "./stores/prefs-store.js";
 import { BRUSH_CHARS, SWATCHES, useToolStore } from "./stores/tool-store.js";
@@ -55,6 +62,7 @@ import { TEMPLATES, templateById } from "./templates.js";
  */
 interface AppBrowserDependencies {
   readonly devicePixelRatio: () => number;
+  readonly platform: () => string;
   readonly observeViewport: (
     element: HTMLElement,
     onResize: (size: { readonly w: number; readonly h: number }) => void,
@@ -94,6 +102,7 @@ export function createAppDependencies(overrides: AppDependencyOverrides = {}): A
     parseLaunchConfig(typeof window === "undefined" ? "" : window.location.search);
   const browserDefaults: AppBrowserDependencies = {
     devicePixelRatio: () => window.devicePixelRatio,
+    platform: () => navigator.platform,
     observeViewport: (element, onResize, onResolutionChange) => {
       const observer = new ResizeObserver(([entry]) => {
         if (entry !== undefined) {
@@ -165,9 +174,9 @@ const TOOL_HINTS: Record<ToolId, string> = {
     "Click a cell to pick its character and colours into the brush. Samples what you see — the topmost visible layer, not the active one. Right-click does the same from any tool.",
 };
 
-const hintFor = (tool: ToolId): string => {
+const hintFor = (tool: ToolId, platform: "mac" | "other"): string => {
   const found = SHORTCUTS.find((s) => s.id === `tool.${tool}`);
-  return found === undefined ? "" : shortcutHint(found);
+  return found === undefined ? "" : shortcutHint(found, platform);
 };
 
 const storageUsage = (status: BrowserStorageStatus): string => {
@@ -183,6 +192,11 @@ export interface AppProps {
 export function App({ dependencies }: AppProps = {}): React.JSX.Element {
   const [runtime] = useState(() => dependencies ?? createAppDependencies());
   const { documentStore, launchConfig } = runtime;
+  const shortcutOs = useMemo(() => shortcutPlatform(runtime.browser.platform()), [runtime]);
+  const shortcutHelpHint = useMemo(() => {
+    const shortcut = SHORTCUTS.find(({ id }) => id === "help.shortcuts");
+    return shortcut === undefined ? "" : shortcutHint(shortcut, shortcutOs);
+  }, [shortcutOs]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
@@ -367,6 +381,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
   const noticeSeq = useRef(0);
   const [recoveries, setRecoveries] = useState<readonly RecoveryInfo[] | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus | null>(null);
 
   const notify = useCallback((message: string) => {
@@ -540,15 +555,22 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       const target = e.target as HTMLElement | null;
-      // Never steal keys from a form control.
-      if (target !== null && /^(INPUT|SELECT|TEXTAREA)$/u.test(target.tagName)) return;
-
       const mods: Modifiers = {
         shift: e.shiftKey,
         alt: e.altKey,
         meta: e.metaKey,
         ctrl: e.ctrlKey,
       };
+      const id = matchShortcut({ key: e.key, mods });
+      // Form controls keep ordinary editing keys. The explicit help chord remains
+      // global so it can also close the searchable panel from its search field.
+      if (
+        target !== null &&
+        /^(INPUT|SELECT|TEXTAREA)$/u.test(target.tagName) &&
+        id !== "help.shortcuts"
+      ) {
+        return;
+      }
       // The text tool owns the keyboard while its caret is placed, so typing "b"
       // writes a character rather than switching to the Box tool. Esc, undo/redo,
       // and zoom still reach the registry below.
@@ -562,18 +584,20 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
         }
       }
 
-      const id = matchShortcut({ key: e.key, mods });
       if (id === null) return;
 
       const recoveryModalOpen = recoveries !== null && recoveries.length > 0;
-      if (recoveryModalOpen || pickerRequest !== null || exporting) {
+      if (recoveryModalOpen || pickerRequest !== null || exporting || shortcutHelpOpen) {
         // A modal owns the keyboard. Escape deliberately settles that one modal;
         // every other global command waits, so shortcuts cannot stack dialogs or
         // mutate the document behind one.
         if (id === "edit.cancel") {
           if (pickerRequest !== null) pickerRequest.resolve(null);
           else if (exporting) setExporting(false);
+          else if (shortcutHelpOpen) setShortcutHelpOpen(false);
           else setRecoveries(null);
+        } else if (id === "help.shortcuts" && shortcutHelpOpen) {
+          setShortcutHelpOpen(false);
         }
         e.preventDefault();
         return;
@@ -589,7 +613,9 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
       const prefsStore = usePrefsStore.getState();
       const toolStore = useToolStore.getState();
 
-      if (id.startsWith("tool.")) {
+      if (id === "help.shortcuts") {
+        setShortcutHelpOpen(true);
+      } else if (id.startsWith("tool.")) {
         // Switching tools mid-gesture cancels it first, per the spec.
         controller.flushTyping("tool-change");
         if (controller.isActive()) {
@@ -684,12 +710,22 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
     // Space is a held modifier for panning, not a shortcut, so it is tracked
     // separately from the registry.
     const onSpaceDown = (e: KeyboardEvent): void => {
+      if (e.defaultPrevented) return;
       const target = e.target as HTMLElement | null;
       if (target !== null && /^(INPUT|SELECT|TEXTAREA)$/u.test(target.tagName)) return;
       // While a text caret is placed, Space is a character, not a pan modifier —
       // otherwise typing a space silently arms Space+drag and the next click pans
       // instead of moving the caret. Wheel and middle-drag panning still work.
-      if (e.code === "Space" && !editingText) {
+      const command = matchShortcut({
+        key: e.key,
+        mods: {
+          alt: e.altKey,
+          ctrl: e.ctrlKey,
+          meta: e.metaKey,
+          shift: e.shiftKey,
+        },
+      });
+      if (command === "view.pan" && !editingText) {
         setSpaceHeld(true);
         e.preventDefault();
       }
@@ -723,6 +759,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
     fileStatus.busy,
     pickerRequest,
     recoveries,
+    shortcutHelpOpen,
     releasePointerSession,
     documentStore,
   ]);
@@ -781,6 +818,40 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
     tools.lockFlashAt !== null && runtime.monotonicNow() - tools.lockFlashAt < 600;
   const activeLayer = doc.layers.find((l) => l.id === doc.activeLayerId);
   const layerNotice = activeLayerNotice(doc);
+
+  const shortcutDisabledReason = (id: ShortcutId): string | null => {
+    const anotherDialogOpen =
+      (recoveries !== null && recoveries.length > 0) || pickerRequest !== null || exporting;
+    if (anotherDialogOpen) return "Close the current dialog first.";
+    if (id.startsWith("file.") && fileStatus.busy) {
+      return `The ${fileStatus.kind} operation is still running.`;
+    }
+    if (id.startsWith("tool.") && editingText) return "Finish the current text edit first.";
+    if (id === "view.pan" && editingText) return "Finish the current text edit first.";
+    if (id === "edit.undo" && !documentStore.getState().canUndo()) return "Nothing to undo.";
+    if (id === "edit.redo" && !documentStore.getState().canRedo()) return "Nothing to redo.";
+    if (
+      (id === "edit.copy" || id === "edit.cut" || id === "edit.delete") &&
+      tools.selection === null
+    ) {
+      return "Select a canvas region first.";
+    }
+    if (id === "edit.delete" && editingText) return "Finish the current text edit first.";
+    if (id === "edit.paste" && tools.clipboard === null) return "Copy or cut a region first.";
+    if (
+      id === "edit.cancel" &&
+      !shortcutHelpOpen &&
+      !editingText &&
+      tools.selection === null &&
+      !controller.isActive()
+    ) {
+      return "There is no current action to cancel.";
+    }
+    if ((id === "layer.next" || id === "layer.previous") && doc.layers.length < 2) {
+      return "The document has only one layer.";
+    }
+    return null;
+  };
 
   /**
    * Applies a layer edit as one history entry.
@@ -847,6 +918,15 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
           />{" "}
           grid
         </label>
+        <button
+          type="button"
+          className="chip"
+          onClick={() => setShortcutHelpOpen(true)}
+          aria-label={`Keyboard shortcuts (${shortcutHelpHint})`}
+        >
+          Shortcuts
+          <kbd>{shortcutHelpHint}</kbd>
+        </button>
       </header>
 
       {warning !== null && (
@@ -868,8 +948,8 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
               key={tool}
               type="button"
               className={tools.activeTool === tool ? "tool active" : "tool"}
-              title={`${label} (${hintFor(tool)})${ready ? "" : " — G3"}`}
-              aria-label={`${label} tool (${hintFor(tool)})`}
+              title={`${label} (${hintFor(tool, shortcutOs)})${ready ? "" : " — G3"}`}
+              aria-label={`${label} tool (${hintFor(tool, shortcutOs)})`}
               aria-pressed={tools.activeTool === tool}
               disabled={!ready}
               onClick={() => {
@@ -881,7 +961,7 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
               }}
             >
               <span className="glyph">{glyph}</span>
-              <span className="key">{hintFor(tool)}</span>
+              <span className="key">{hintFor(tool, shortcutOs)}</span>
             </button>
           ))}
         </nav>
@@ -1161,6 +1241,12 @@ export function App({ dependencies }: AppProps = {}): React.JSX.Element {
           theme={DARK_THEME}
           onClose={() => setExporting(false)}
           onError={notify}
+        />
+      ) : shortcutHelpOpen ? (
+        <ShortcutHelpDialog
+          platform={shortcutOs}
+          disabledReason={shortcutDisabledReason}
+          onClose={() => setShortcutHelpOpen(false)}
         />
       ) : null}
 

@@ -24,6 +24,7 @@ import {
   type TuiDocument,
 } from "@tui-designer/core";
 import { useRef, useState } from "react";
+import { matchShortcut } from "../shortcuts.js";
 import {
   canDelete,
   canMergeDown,
@@ -180,10 +181,22 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                   onClick={() => onEdit(setActiveLayer(doc, layer.id))}
                   onDoubleClick={() => setEditing({ id: layer.id, value: layer.name })}
                   onKeyDown={(event) => {
-                    if (event.key === "F2") {
+                    const command = matchShortcut(
+                      {
+                        key: event.key,
+                        mods: {
+                          alt: event.altKey,
+                          ctrl: event.ctrlKey,
+                          meta: event.metaKey,
+                          shift: event.shiftKey,
+                        },
+                      },
+                      "layer-list",
+                    );
+                    if (command === "layer.rename") {
                       event.preventDefault();
                       setEditing({ id: layer.id, value: layer.name });
-                    } else if (event.key === "ArrowUp" && displayIndex > 0) {
+                    } else if (command === "layer.moveUp" && displayIndex > 0) {
                       event.preventDefault();
                       onEdit(
                         moveLayer(
@@ -192,7 +205,7 @@ export function LayersPanel({ doc, onEdit, confirm }: LayersPanelProps): React.J
                           reorderTargetIndex(displayIndex - 1, doc.layers.length),
                         ),
                       );
-                    } else if (event.key === "ArrowDown" && displayIndex < rows.length - 1) {
+                    } else if (command === "layer.moveDown" && displayIndex < rows.length - 1) {
                       event.preventDefault();
                       onEdit(
                         moveLayer(

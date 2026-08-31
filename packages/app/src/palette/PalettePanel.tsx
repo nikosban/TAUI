@@ -25,6 +25,7 @@ import { useState } from "react";
 import type { Theme } from "../canvas/paint-plan.js";
 import { cssColor } from "../canvas/paint-plan.js";
 import type { BrushState } from "../gestures/gesture.js";
+import { matchShortcut } from "../shortcuts.js";
 import { SWATCHES } from "../stores/tool-store.js";
 import {
   colorModeIsLossy,
@@ -179,7 +180,19 @@ export function PalettePanel({
                 onDoubleClick={() => setEditing({ id: entry.id, value: entry.name })}
                 onClick={() => setRecolouring(recolouring === entry.id ? null : entry.id)}
                 onKeyDown={(event) => {
-                  if (event.key === "F2") {
+                  const command = matchShortcut(
+                    {
+                      key: event.key,
+                      mods: {
+                        alt: event.altKey,
+                        ctrl: event.ctrlKey,
+                        meta: event.metaKey,
+                        shift: event.shiftKey,
+                      },
+                    },
+                    "palette-list",
+                  );
+                  if (command === "palette.rename") {
                     event.preventDefault();
                     event.stopPropagation();
                     setEditing({ id: entry.id, value: entry.name });

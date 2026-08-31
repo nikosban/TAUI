@@ -13,6 +13,7 @@ export interface ModalProps {
   readonly title: string;
   readonly onDismiss: () => void;
   readonly children: React.ReactNode;
+  readonly className?: string;
 }
 
 /**
@@ -20,7 +21,7 @@ export interface ModalProps {
  * Escape dismissal, and focus restoration. The App makes its sibling surface
  * inert while any Modal is mounted.
  */
-export function Modal({ title, onDismiss, children }: ModalProps): React.JSX.Element {
+export function Modal({ title, onDismiss, children, className }: ModalProps): React.JSX.Element {
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -61,7 +62,7 @@ export function Modal({ title, onDismiss, children }: ModalProps): React.JSX.Ele
     <div ref={backdropRef} className="modal-backdrop">
       <div
         ref={dialogRef}
-        className="modal"
+        className={className === undefined ? "modal" : `modal ${className}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

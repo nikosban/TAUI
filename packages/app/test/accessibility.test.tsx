@@ -45,7 +45,7 @@ describe("accessible component boundary", () => {
     await expectNoAccessibilityViolations();
   });
 
-  it("checks the Open, Save as, Export, and Recovery dialogs", async () => {
+  it("checks the Open, Save as, Export, shortcut-help, and Recovery dialogs", async () => {
     const { user, fileStore } = renderApp({ now: vi.fn(() => 100_000) });
     await fileStore.save(
       { key: "available.tui", label: "available.tui", display: "available.tui" },
@@ -66,6 +66,11 @@ describe("accessible component boundary", () => {
     const exportDialog = await screen.findByRole("dialog", { name: "Export" });
     await expectNoAccessibilityViolations();
     await user.click(within(exportDialog).getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts (⌘/)" }));
+    const shortcutHelp = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+    await expectNoAccessibilityViolations();
+    await user.click(within(shortcutHelp).getByRole("button", { name: "Close" }));
 
     cleanup();
     const recoveryStore = memoryStore({ now: () => 90_000 });

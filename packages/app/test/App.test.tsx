@@ -5,6 +5,7 @@ import { DEFAULT_COLOR, deserialize, drawText, toText } from "@tui-designer/core
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sealCommit } from "../src/gestures/commit.js";
 import type { DocHandle, FileStore } from "../src/ports/file-store.js";
+import { SHORTCUTS, shortcutsByGroup } from "../src/shortcuts.js";
 import { createDocumentStore } from "../src/stores/document-store.js";
 import { useToolStore } from "../src/stores/tool-store.js";
 import { templateById } from "../src/templates.js";
@@ -29,6 +30,48 @@ afterEach(() => {
 });
 
 describe("App component boundary", () => {
+  it("opens generated searchable command help with current availability", async () => {
+    const { user } = renderApp();
+    const trigger = screen.getByRole("button", { name: "Keyboard shortcuts (⌘/)" });
+
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    const search = within(dialog).getByRole("searchbox", { name: "Search commands" });
+    expect(document.activeElement).toBe(search);
+    expect(within(dialog).getByText(`${SHORTCUTS.length} commands`)).toBeTruthy();
+    expect(
+      [...dialog.querySelectorAll(".shortcut-command strong")].map((node) => node.textContent),
+    ).toEqual(shortcutsByGroup().flatMap(({ items }) => items.map(({ label }) => label)));
+    expect(within(dialog).getByText("Save")).toBeTruthy();
+    expect(within(dialog).getByText("Rename focused layer")).toBeTruthy();
+    expect(within(dialog).getAllByText("Currently unavailable:").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText("Nothing to undo.")).toBeTruthy();
+
+    await user.type(search, "layer");
+    expect(within(dialog).getByText("5 commands")).toBeTruthy();
+    expect(within(dialog).queryByText("Save")).toBeNull();
+    expect(within(dialog).getByText("Move focused layer up")).toBeTruthy();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("uses non-macOS labels and toggles help from its global chord", async () => {
+    renderApp({ platform: "Win32" });
+    const trigger = screen.getByRole("button", { name: "Keyboard shortcuts (Ctrl+/)" });
+    expect(trigger.textContent).toContain("Ctrl+/");
+
+    fireEvent.keyDown(window, { key: "/", ctrlKey: true });
+    const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(dialog).getAllByText("Ctrl+S").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText("Ctrl+Shift+S")).toBeTruthy();
+
+    const search = within(dialog).getByRole("searchbox", { name: "Search commands" });
+    fireEvent.keyDown(search, { key: "/", ctrlKey: true });
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+  });
+
   it("injects clipboard behavior without reading the browser clipboard global", async () => {
     useToolStore.setState({ selection: { top: 0, left: 0, rows: 2, cols: 3 } });
     const { user, writeClipboard } = renderApp();

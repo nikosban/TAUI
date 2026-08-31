@@ -1,10 +1,9 @@
 /**
- * One registry for every keyboard shortcut.
+ * One registry for every application command with a keyboard binding.
  *
- * The spec requires this so the eventual "shortcuts help" panel is *generated*
- * rather than hand-maintained — a hand-written help panel drifts from reality on
- * the first change. `matchShortcut` is pure and takes a plain descriptor rather
- * than a `KeyboardEvent`, so the whole table is unit-testable with no DOM.
+ * Global handlers and focused panel handlers both resolve through this table, so
+ * the command-help dialog, visible hints, and conflict checks cannot drift from
+ * the behavior they describe.
  */
 
 import type { Modifiers } from "./gestures/gesture.js";
@@ -32,22 +31,29 @@ export type ShortcutId =
   | "view.zoomOut"
   | "view.zoomReset"
   | "view.toggleGrid"
+  | "view.pan"
   | "layer.next"
-  | "layer.previous";
+  | "layer.previous"
+  | "layer.rename"
+  | "layer.moveUp"
+  | "layer.moveDown"
+  | "palette.rename"
+  | "help.shortcuts";
 
-export type ShortcutGroup = "File" | "Tools" | "Edit" | "View" | "Layer";
+export type ShortcutGroup = "File" | "Tools" | "Edit" | "View" | "Layer" | "Palette" | "Help";
+export type ShortcutScope = "global" | "layer-list" | "palette-list";
+export type ShortcutPlatform = "mac" | "other";
 
 export interface Shortcut {
   readonly id: ShortcutId;
   readonly group: ShortcutGroup;
-  /** Human label for the help panel. */
   readonly label: string;
-  /**
-   * `event.key` values that trigger this, compared case-insensitively.
-   *
-   * Typed as non-empty so `keys[0]` needs no fallback — a shortcut with no key
-   * would be meaningless.
-   */
+  /** Where focus must be for the binding to apply. */
+  readonly context: string;
+  /** Why the command can be unavailable, generated beside its current state. */
+  readonly unavailableWhen: string;
+  readonly scope: ShortcutScope;
+  /** `event.key` values, compared case-insensitively. */
   readonly keys: readonly [string, ...string[]];
   /** Require Cmd/Ctrl. Default false. */
   readonly meta?: boolean;
@@ -56,84 +62,352 @@ export interface Shortcut {
 }
 
 export const SHORTCUTS: readonly Shortcut[] = [
-  { id: "file.save", group: "File", label: "Save", keys: ["s"], meta: true, shift: false },
-  { id: "file.saveAs", group: "File", label: "Save as", keys: ["s"], meta: true, shift: true },
-  { id: "file.open", group: "File", label: "Open", keys: ["o"], meta: true },
-  { id: "file.export", group: "File", label: "Export", keys: ["e"], meta: true },
+  {
+    id: "file.save",
+    group: "File",
+    label: "Save",
+    context: "Editor",
+    unavailableWhen: "A file operation is already running.",
+    scope: "global",
+    keys: ["s"],
+    meta: true,
+    shift: false,
+  },
+  {
+    id: "file.saveAs",
+    group: "File",
+    label: "Save as",
+    context: "Editor",
+    unavailableWhen: "A file operation is already running.",
+    scope: "global",
+    keys: ["s"],
+    meta: true,
+    shift: true,
+  },
+  {
+    id: "file.open",
+    group: "File",
+    label: "Open",
+    context: "Editor",
+    unavailableWhen: "A file operation is already running.",
+    scope: "global",
+    keys: ["o"],
+    meta: true,
+  },
+  {
+    id: "file.export",
+    group: "File",
+    label: "Export",
+    context: "Editor",
+    unavailableWhen: "A file operation or dialog is already open.",
+    scope: "global",
+    keys: ["e"],
+    meta: true,
+  },
 
-  { id: "tool.pencil", group: "Tools", label: "Pencil", keys: ["p"] },
-  { id: "tool.box", group: "Tools", label: "Box", keys: ["b"] },
-  { id: "tool.line", group: "Tools", label: "Line", keys: ["l"] },
-  { id: "tool.select", group: "Tools", label: "Select", keys: ["v"] },
-  { id: "tool.text", group: "Tools", label: "Text (G3)", keys: ["t"] },
-  { id: "tool.fill", group: "Tools", label: "Fill (G3)", keys: ["g"] },
-  { id: "tool.eyedropper", group: "Tools", label: "Eyedropper (G3)", keys: ["i"] },
+  ...(
+    [
+      ["tool.pencil", "Pencil", "p"],
+      ["tool.box", "Box", "b"],
+      ["tool.line", "Line", "l"],
+      ["tool.select", "Select", "v"],
+      ["tool.text", "Text", "t"],
+      ["tool.fill", "Fill", "g"],
+      ["tool.eyedropper", "Eyedropper", "i"],
+    ] as const
+  ).map(
+    ([id, label, key]): Shortcut => ({
+      id,
+      group: "Tools",
+      label,
+      context: "Canvas",
+      unavailableWhen: "Text editing or a dialog owns the keyboard.",
+      scope: "global",
+      keys: [key],
+    }),
+  ),
+  {
+    id: "view.pan",
+    group: "View",
+    label: "Pan canvas (hold and drag)",
+    context: "Canvas",
+    unavailableWhen: "Text editing or a dialog owns the keyboard.",
+    scope: "global",
+    keys: [" "],
+  },
 
-  { id: "edit.undo", group: "Edit", label: "Undo", keys: ["z"], meta: true, shift: false },
-  { id: "edit.redo", group: "Edit", label: "Redo", keys: ["z"], meta: true, shift: true },
-  { id: "edit.delete", group: "Edit", label: "Clear selection", keys: ["Delete", "Backspace"] },
-  { id: "edit.cancel", group: "Edit", label: "Cancel gesture", keys: ["Escape"] },
-  { id: "edit.copy", group: "Edit", label: "Copy selection", keys: ["c"], meta: true },
-  { id: "edit.cut", group: "Edit", label: "Cut selection", keys: ["x"], meta: true },
-  { id: "edit.paste", group: "Edit", label: "Paste (click to place)", keys: ["v"], meta: true },
+  {
+    id: "edit.undo",
+    group: "Edit",
+    label: "Undo",
+    context: "Editor",
+    unavailableWhen: "There is no earlier document state.",
+    scope: "global",
+    keys: ["z"],
+    meta: true,
+    shift: false,
+  },
+  {
+    id: "edit.redo",
+    group: "Edit",
+    label: "Redo",
+    context: "Editor",
+    unavailableWhen: "There is no later document state.",
+    scope: "global",
+    keys: ["z"],
+    meta: true,
+    shift: true,
+  },
+  {
+    id: "edit.delete",
+    group: "Edit",
+    label: "Clear selection",
+    context: "Canvas selection",
+    unavailableWhen: "No region is selected or text is being edited.",
+    scope: "global",
+    keys: ["Delete", "Backspace"],
+  },
+  {
+    id: "edit.cancel",
+    group: "Edit",
+    label: "Cancel current action",
+    context: "Editor",
+    unavailableWhen: "There is no gesture, text edit, selection, paste, or dialog to cancel.",
+    scope: "global",
+    keys: ["Escape"],
+  },
+  {
+    id: "edit.copy",
+    group: "Edit",
+    label: "Copy selection",
+    context: "Canvas selection",
+    unavailableWhen: "No region is selected.",
+    scope: "global",
+    keys: ["c"],
+    meta: true,
+  },
+  {
+    id: "edit.cut",
+    group: "Edit",
+    label: "Cut selection",
+    context: "Canvas selection",
+    unavailableWhen: "No region is selected.",
+    scope: "global",
+    keys: ["x"],
+    meta: true,
+  },
+  {
+    id: "edit.paste",
+    group: "Edit",
+    label: "Paste and place",
+    context: "Canvas",
+    unavailableWhen: "The internal clipboard is empty.",
+    scope: "global",
+    keys: ["v"],
+    meta: true,
+  },
 
-  { id: "view.zoomIn", group: "View", label: "Zoom in", keys: ["+", "="] },
-  { id: "view.zoomOut", group: "View", label: "Zoom out", keys: ["-", "_"] },
-  { id: "view.zoomReset", group: "View", label: "Reset zoom", keys: ["0"] },
-  { id: "view.toggleGrid", group: "View", label: "Toggle grid", keys: ["#"] },
+  ...(
+    [
+      ["view.zoomIn", "Zoom in", ["+", "="]],
+      ["view.zoomOut", "Zoom out", ["-", "_"]],
+      ["view.zoomReset", "Reset zoom", ["0"]],
+      ["view.toggleGrid", "Toggle grid", ["#"]],
+    ] as const
+  ).map(
+    ([id, label, keys]): Shortcut => ({
+      id,
+      group: "View",
+      label,
+      context: "Canvas",
+      unavailableWhen: "A dialog owns the keyboard.",
+      scope: "global",
+      keys,
+    }),
+  ),
 
-  { id: "layer.next", group: "Layer", label: "Next layer", keys: ["]"] },
-  { id: "layer.previous", group: "Layer", label: "Previous layer", keys: ["["] },
+  {
+    id: "layer.next",
+    group: "Layer",
+    label: "Next layer",
+    context: "Editor",
+    unavailableWhen: "The document has only one layer or a dialog is open.",
+    scope: "global",
+    keys: ["]"],
+  },
+  {
+    id: "layer.previous",
+    group: "Layer",
+    label: "Previous layer",
+    context: "Editor",
+    unavailableWhen: "The document has only one layer or a dialog is open.",
+    scope: "global",
+    keys: ["["],
+  },
+  {
+    id: "layer.rename",
+    group: "Layer",
+    label: "Rename focused layer",
+    context: "Focused layer",
+    unavailableWhen: "A layer name is not focused.",
+    scope: "layer-list",
+    keys: ["F2"],
+  },
+  {
+    id: "layer.moveUp",
+    group: "Layer",
+    label: "Move focused layer up",
+    context: "Focused layer",
+    unavailableWhen: "The top layer is focused.",
+    scope: "layer-list",
+    keys: ["ArrowUp"],
+  },
+  {
+    id: "layer.moveDown",
+    group: "Layer",
+    label: "Move focused layer down",
+    context: "Focused layer",
+    unavailableWhen: "The bottom layer is focused.",
+    scope: "layer-list",
+    keys: ["ArrowDown"],
+  },
+  {
+    id: "palette.rename",
+    group: "Palette",
+    label: "Rename focused colour",
+    context: "Focused palette colour",
+    unavailableWhen: "A palette colour name is not focused.",
+    scope: "palette-list",
+    keys: ["F2"],
+  },
+  {
+    id: "help.shortcuts",
+    group: "Help",
+    label: "Keyboard shortcuts",
+    context: "Editor",
+    unavailableWhen: "Another dialog owns the keyboard.",
+    scope: "global",
+    keys: ["/"],
+    meta: true,
+  },
 ];
 
-/** The shape `matchShortcut` needs — a subset of KeyboardEvent. */
+/** The shape shortcut matching needs — a subset of KeyboardEvent. */
 export interface KeyDescriptor {
   readonly key: string;
   readonly mods: Modifiers;
 }
 
-/**
- * Every shortcut whose declared conditions match the keypress.
- *
- * Exported for the ambiguity test, which asserts this never returns more than one
- * entry. That property is what lets {@link matchShortcut} simply take the first
- * match instead of ranking candidates: undo/redo already disambiguate through the
- * Shift condition, so no tie-breaking is needed. A new shortcut that *did*
- * collide would fail that test rather than silently shadow an existing binding.
- */
-export function matchingShortcuts(descriptor: KeyDescriptor): Shortcut[] {
+const matches = (shortcut: Shortcut, descriptor: KeyDescriptor): boolean => {
   const { key, mods } = descriptor;
   const meta = mods.meta || mods.ctrl;
   const lower = key.toLowerCase();
+  if (!shortcut.keys.some((candidate) => candidate.toLowerCase() === lower)) return false;
+  if ((shortcut.meta ?? false) !== meta) return false;
+  if (shortcut.shift !== undefined && shortcut.shift !== mods.shift) return false;
+  return true;
+};
 
-  return SHORTCUTS.filter((shortcut) => {
-    if (!shortcut.keys.some((k) => k.toLowerCase() === lower)) return false;
-    if ((shortcut.meta ?? false) !== meta) return false;
-    if (shortcut.shift !== undefined && shortcut.shift !== mods.shift) return false;
-    return true;
-  });
+/** Every shortcut whose declared scope and conditions match the keypress. */
+export function matchingShortcuts(
+  descriptor: KeyDescriptor,
+  scope: ShortcutScope = "global",
+): Shortcut[] {
+  return SHORTCUTS.filter((shortcut) => shortcut.scope === scope && matches(shortcut, descriptor));
 }
 
 /** Resolves a keypress to a shortcut id, or `null`. */
-export function matchShortcut(descriptor: KeyDescriptor): ShortcutId | null {
-  return matchingShortcuts(descriptor)[0]?.id ?? null;
+export function matchShortcut(
+  descriptor: KeyDescriptor,
+  scope: ShortcutScope = "global",
+): ShortcutId | null {
+  return matchingShortcuts(descriptor, scope)[0]?.id ?? null;
 }
 
-/** Grouped for the help panel, preserving declaration order within each group. */
+/** Grouped for generated command help, preserving registry order. */
 export function shortcutsByGroup(): { group: ShortcutGroup; items: Shortcut[] }[] {
-  const groups: ShortcutGroup[] = ["File", "Tools", "Edit", "View", "Layer"];
-  return groups.map((group) => ({
-    group,
-    items: SHORTCUTS.filter((s) => s.group === group),
-  }));
+  const groups: ShortcutGroup[] = ["File", "Tools", "Edit", "View", "Layer", "Palette", "Help"];
+  return groups
+    .map((group) => ({ group, items: SHORTCUTS.filter((shortcut) => shortcut.group === group) }))
+    .filter(({ items }) => items.length > 0);
 }
 
-/** Display form, e.g. "⌘⇧Z". macOS-flavoured; G5 can platform-switch this. */
-export function shortcutHint(shortcut: Shortcut): string {
-  const parts: string[] = [];
-  if (shortcut.meta === true) parts.push("⌘");
-  if (shortcut.shift === true) parts.push("⇧");
-  const key = shortcut.keys[0];
-  parts.push(key.length === 1 ? key.toUpperCase() : key);
-  return parts.join("");
+const displayKey = (key: string): string => {
+  const names: Readonly<Record<string, string>> = {
+    ArrowDown: "↓",
+    ArrowUp: "↑",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Escape: "Esc",
+    " ": "Space",
+  };
+  return names[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+};
+
+/** Display forms for every accepted key, such as `⌘Z` or `Ctrl+Z`. */
+export function shortcutHints(shortcut: Shortcut, platform: ShortcutPlatform): string[] {
+  return shortcut.keys.map((key) => {
+    if (platform === "mac") {
+      return `${shortcut.meta === true ? "⌘" : ""}${shortcut.shift === true ? "⇧" : ""}${displayKey(key)}`;
+    }
+    const modifiers = [
+      ...(shortcut.meta === true ? ["Ctrl"] : []),
+      ...(shortcut.shift === true ? ["Shift"] : []),
+    ];
+    return [...modifiers, displayKey(key)].join("+");
+  });
+}
+
+/** Compact display form used by tooltips and toolbar keys. */
+export function shortcutHint(shortcut: Shortcut, platform: ShortcutPlatform = "mac"): string {
+  return shortcutHints(shortcut, platform)[0] ?? "";
+}
+
+export function shortcutPlatform(platform: string): ShortcutPlatform {
+  return /Mac|iPhone|iPad|iPod/u.test(platform) ? "mac" : "other";
+}
+
+export interface ShortcutConflict {
+  readonly scope: ShortcutScope;
+  readonly key: string;
+  readonly meta: boolean;
+  readonly shift: boolean;
+  readonly ids: readonly ShortcutId[];
+}
+
+/**
+ * Exhaustively finds ambiguous bindings in each focus scope.
+ *
+ * A shortcut whose Shift requirement is omitted intentionally matches both Shift
+ * states, so comparing registry rows directly would miss real overlaps. Sweeping
+ * the actual matcher keeps this check identical to runtime behavior.
+ */
+export function shortcutConflicts(): ShortcutConflict[] {
+  const conflicts: ShortcutConflict[] = [];
+  const scopes = new Set(SHORTCUTS.map((shortcut) => shortcut.scope));
+  for (const scope of scopes) {
+    const keys = new Set(
+      SHORTCUTS.filter((shortcut) => shortcut.scope === scope).flatMap((shortcut) =>
+        shortcut.keys.map((key) => key.toLowerCase()),
+      ),
+    );
+    for (const key of keys) {
+      for (const meta of [false, true]) {
+        for (const shift of [false, true]) {
+          const found = SHORTCUTS.filter(
+            (shortcut) =>
+              shortcut.scope === scope &&
+              matches(shortcut, {
+                key,
+                mods: { alt: false, ctrl: false, meta, shift },
+              }),
+          );
+          if (found.length > 1) {
+            conflicts.push({ scope, key, meta, shift, ids: found.map(({ id }) => id) });
+          }
+        }
+      }
+    }
+  }
+  return conflicts;
 }

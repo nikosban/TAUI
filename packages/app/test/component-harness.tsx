@@ -27,6 +27,7 @@ export interface ComponentHarnessOptions {
   readonly now?: Mock<() => number>;
   readonly monotonicNow?: Mock<() => number>;
   readonly writeClipboard?: Mock<(text: string) => Promise<void>>;
+  readonly platform?: string;
 }
 
 export interface ComponentHarness {
@@ -109,6 +110,7 @@ export function renderApp(options: ComponentHarnessOptions = {}): ComponentHarne
     },
     browser: {
       devicePixelRatio: () => 1,
+      platform: () => options.platform ?? "MacIntel",
       observeViewport: () => () => undefined,
       writeClipboard,
     },
