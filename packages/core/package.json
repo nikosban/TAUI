@@ -6,7 +6,8 @@
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "!dist/metafile-*.json"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -29,6 +30,7 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
+    "test:packed": "pnpm build && tsx scripts/test-packed-cli.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "check:arch": "tsx scripts/check-arch.ts",

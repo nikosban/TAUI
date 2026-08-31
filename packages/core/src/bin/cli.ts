@@ -127,9 +127,10 @@ export function run(argv: readonly string[], io: Io): number {
     return 2;
   }
 
-  if (args.flags.has("h") || args.flags.has("help") || args.command === "") {
+  const helpRequested = args.flags.has("h") || args.flags.has("help");
+  if (helpRequested || args.command === "") {
     io.stdout(USAGE);
-    return args.command === "" ? 2 : 0;
+    return helpRequested ? 0 : 2;
   }
 
   try {

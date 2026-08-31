@@ -85,5 +85,6 @@ jobs:
 
       - name: Validate published core package
         run: |
+          pnpm --filter @tui-designer/core test:packed
           pnpm --filter @tui-designer/core lint:pkg
           pnpm --filter @tui-designer/core check:bundle

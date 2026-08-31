@@ -110,8 +110,9 @@ describe("usage", () => {
 
   it("prints usage and succeeds for --help", () => {
     const h = harness();
-    expect(run(["render", "--help"], h.io)).toBe(0);
+    expect(run(["--help"], h.io)).toBe(0);
     expect(h.out).toContain("Options");
+    expect(h.err).toBe("");
   });
 
   it("rejects an unknown command", () => {
