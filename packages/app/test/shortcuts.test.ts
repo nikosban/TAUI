@@ -132,6 +132,22 @@ describe("the registry itself", () => {
     expect(shortcutConflicts()).toEqual([]);
   });
 
+  it("reports conflicts through the same exhaustive matcher", () => {
+    const save = SHORTCUTS.find((shortcut) => shortcut.id === "file.save");
+    const saveAs = SHORTCUTS.find((shortcut) => shortcut.id === "file.saveAs");
+    if (save === undefined || saveAs === undefined) throw new Error("Missing file shortcuts");
+
+    expect(shortcutConflicts([save, { ...saveAs, keys: ["s"], shift: false }])).toEqual([
+      {
+        scope: "global",
+        key: "s",
+        meta: true,
+        shift: false,
+        ids: ["file.save", "file.saveAs"],
+      },
+    ]);
+  });
+
   it("groups every shortcut for the generated help panel", () => {
     const grouped = shortcutsByGroup();
     const total = grouped.reduce((n, g) => n + g.items.length, 0);

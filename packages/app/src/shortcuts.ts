@@ -345,8 +345,11 @@ const displayKey = (key: string): string => {
 };
 
 /** Display forms for every accepted key, such as `⌘Z` or `Ctrl+Z`. */
-export function shortcutHints(shortcut: Shortcut, platform: ShortcutPlatform): string[] {
-  return shortcut.keys.map((key) => {
+export function shortcutHints(
+  shortcut: Shortcut,
+  platform: ShortcutPlatform,
+): [string, ...string[]] {
+  const render = (key: string): string => {
     if (platform === "mac") {
       return `${shortcut.meta === true ? "⌘" : ""}${shortcut.shift === true ? "⇧" : ""}${displayKey(key)}`;
     }
@@ -355,12 +358,14 @@ export function shortcutHints(shortcut: Shortcut, platform: ShortcutPlatform): s
       ...(shortcut.shift === true ? ["Shift"] : []),
     ];
     return [...modifiers, displayKey(key)].join("+");
-  });
+  };
+  const [first, ...rest] = shortcut.keys;
+  return [render(first), ...rest.map(render)];
 }
 
 /** Compact display form used by tooltips and toolbar keys. */
 export function shortcutHint(shortcut: Shortcut, platform: ShortcutPlatform = "mac"): string {
-  return shortcutHints(shortcut, platform)[0] ?? "";
+  return shortcutHints(shortcut, platform)[0];
 }
 
 export function shortcutPlatform(platform: string): ShortcutPlatform {
@@ -382,19 +387,19 @@ export interface ShortcutConflict {
  * states, so comparing registry rows directly would miss real overlaps. Sweeping
  * the actual matcher keeps this check identical to runtime behavior.
  */
-export function shortcutConflicts(): ShortcutConflict[] {
+export function shortcutConflicts(shortcuts: readonly Shortcut[] = SHORTCUTS): ShortcutConflict[] {
   const conflicts: ShortcutConflict[] = [];
-  const scopes = new Set(SHORTCUTS.map((shortcut) => shortcut.scope));
+  const scopes = new Set(shortcuts.map((shortcut) => shortcut.scope));
   for (const scope of scopes) {
     const keys = new Set(
-      SHORTCUTS.filter((shortcut) => shortcut.scope === scope).flatMap((shortcut) =>
-        shortcut.keys.map((key) => key.toLowerCase()),
-      ),
+      shortcuts
+        .filter((shortcut) => shortcut.scope === scope)
+        .flatMap((shortcut) => shortcut.keys.map((key) => key.toLowerCase())),
     );
     for (const key of keys) {
       for (const meta of [false, true]) {
         for (const shift of [false, true]) {
-          const found = SHORTCUTS.filter(
+          const found = shortcuts.filter(
             (shortcut) =>
               shortcut.scope === scope &&
               matches(shortcut, {
